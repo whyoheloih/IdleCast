@@ -56,7 +56,7 @@ The trusted-host boundary includes host administrators and the service account, 
 
 ## Resource tradeoffs
 
-One encode, two remux workers, next-video prefetch, 720p30 at 2500 kbps. Standby only starts after a one-second preparation delay. No media upload server, distributed queue, Redis, transcoding farm, or browser video preview. The metadata API is paged, and the browser virtualizes rows but retains its fetched metadata array.
+One encode, two remux workers, next-video prefetch, 720p30 at 2500 kbps. Standby only starts after a one-second preparation delay. The overlay editor requests current-source snapshots about every two seconds only while open and visible. Preview rendering is limited to one process, eight seconds and an 8 MiB output buffer, with isolated temporary files and cancellation on disconnect/source transition. No media upload server, distributed queue, Redis, transcoding farm, or full-motion browser stream player. The metadata API is paged, and the browser virtualizes rows but retains its fetched metadata array.
 
 ## Layout
 
@@ -65,6 +65,7 @@ One encode, two remux workers, next-video prefetch, 720p30 at 2500 kbps. Standby
 - server/db.ts: migration, snapshots, recovery and diagnostics
 - server/process.ts: bounded subprocesses, cancellation and backoff
 - server/encoder.ts and overlay.ts: FFmpeg options, standby and identity overlay
+- server/preview.ts and web/OverlayEditor.tsx: authenticated draft previews and independent text/avatar scaling
 - server/engine.ts: serialized playback and independent outputs
 - server/app.ts and index.ts: authenticated API/SSE and lifecycle
 - web/: responsive dashboard

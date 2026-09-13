@@ -15,10 +15,12 @@ import { settingsSchema } from "./config.js";
 import { Store } from "./db.js";
 import { Engine } from "./engine.js";
 import { runCapture } from "./process.js";
+import { OverlayPreview } from "./preview.js";
 const digest = (token: string) =>
   createHash("sha256").update(token).digest("hex");
 export function createApp(c: Config, store: Store, engine: Engine) {
   const app = express();
+  const preview = new OverlayPreview(c);
   app.disable("x-powered-by");
   store.db.exec("DELETE FROM sessions"); // Password/environment changes invalidate existing sessions.
   const salt = randomBytes(16),
@@ -31,7 +33,7 @@ export function createApp(c: Config, store: Store, engine: Engine) {
       "Referrer-Policy": "no-referrer",
       "X-Frame-Options": "DENY",
       "Content-Security-Policy":
-        "default-src 'self'; img-src 'self' https://i.ytimg.com data:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+        "default-src 'self'; img-src 'self' https://i.ytimg.com data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
     });
     next();
   });
@@ -135,6 +137,63 @@ export function createApp(c: Config, store: Store, engine: Engine) {
     res.json({ ok: true });
   });
   app.get("/api/state", (_req, res) => res.json(engine.snapshot()));
+  app.put("/api/overlay", (req, res) => {
+    if (engine.state !== "stopped" || engine.syncing) {
+      res
+        .status(409)
+        .json({
+          error: "Stop playback and wait for sync before saving the overlay",
+        });
+      return;
+    }
+    const parsed = settingsSchema.shape.overlay.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid overlay settings" });
+      return;
+    }
+    const settings = { ...store.settings(), overlay: parsed.data };
+    store.set("settings", settings);
+    engine.event("Overlay settings updated");
+    res.json({ settings });
+  });
+  app.post("/api/overlay/preview", async (req, res) => {
+    const parsed = settingsSchema.shape.overlay.safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid overlay settings" });
+      return;
+    }
+    if (preview.busy) {
+      res
+        .set("Retry-After", "1")
+        .status(429)
+        .json({ error: "Preview is busy; retry shortly" });
+      return;
+    }
+    const controller = new AbortController();
+    const cancel = () => controller.abort();
+    res.on("close", cancel);
+    try {
+      const source = engine.previewSource();
+      const frame = await preview.render(
+        { ...store.settings(), overlay: parsed.data },
+        source,
+        controller.signal,
+      );
+      if (!controller.signal.aborted)
+        res
+          .set("X-Preview-Source", source ? "current-video" : "standby")
+          .type("png")
+          .send(frame);
+    } catch {
+      if (!controller.signal.aborted)
+        res.status(503).json({
+          error:
+            "Preview unavailable. Check the avatar filename, font, and FFmpeg in Health, then retry.",
+        });
+    } finally {
+      res.off("close", cancel);
+    }
+  });
   app.get("/api/settings", (_req, res) =>
     res.json({
       settings: store.settings(),
@@ -148,36 +207,30 @@ export function createApp(c: Config, store: Store, engine: Engine) {
   );
   app.put("/api/settings", (req, res) => {
     if (engine.state !== "stopped" || engine.syncing) {
-      res
-        .status(409)
-        .json({
-          error: "Stop playback and wait for sync before saving settings",
-        });
+      res.status(409).json({
+        error: "Stop playback and wait for sync before saving settings",
+      });
       return;
     }
     const parsed = settingsSchema.safeParse(req.body);
     if (!parsed.success) {
-      res
-        .status(400)
-        .json({
-          error: "Invalid settings",
-          fields: parsed.error.issues.map((i) => ({
-            field: i.path.join("."),
-            message: i.message,
-          })),
-        });
+      res.status(400).json({
+        error: "Invalid settings",
+        fields: parsed.error.issues.map((i) => ({
+          field: i.path.join("."),
+          message: i.message,
+        })),
+      });
       return;
     }
     if (
       parsed.data.mediaSource === "youtube-experimental" &&
       !c.EXPERIMENTAL_YOUTUBE
     ) {
-      res
-        .status(400)
-        .json({
-          error:
-            "Enable EXPERIMENTAL_YOUTUBE in the environment to use YouTube media",
-        });
+      res.status(400).json({
+        error:
+          "Enable EXPERIMENTAL_YOUTUBE in the environment to use YouTube media",
+      });
       return;
     }
     if (parsed.data.playlistId !== store.settings().playlistId) {
@@ -328,19 +381,18 @@ export function createApp(c: Config, store: Store, engine: Engine) {
       }
       const allowed =
         /^(Configure|Sync a|Enable at|Missing |Experimental adapter|Playback is|Playlist sync failed|Stop playback|Service is)/;
-      res
-        .status(err?.type === "entity.too.large" ? 413 : 400)
-        .json({
-          error: allowed.test(err?.message)
-            ? err.message
-            : "Request failed; check settings and health diagnostics",
-        });
+      res.status(err?.type === "entity.too.large" ? 413 : 400).json({
+        error: allowed.test(err?.message)
+          ? err.message
+          : "Request failed; check settings and health diagnostics",
+      });
     },
   );
   return {
     app,
     closeStreams: () => {
       for (const res of clients) res.end();
+      void preview.close();
     },
   };
 }

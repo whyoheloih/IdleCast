@@ -8,13 +8,34 @@ import { readConfig, defaults } from "../server/config.js";
 import { Store } from "../server/db.js";
 import { Engine } from "../server/engine.js";
 import { createApp } from "../server/app.js";
+import { runCapture } from "../server/process.js";
 const root = await mkdtemp(path.join(os.tmpdir(), "idlecast-browser-"));
 const password = randomBytes(24).toString("base64url");
 const c = readConfig({
   ADMIN_PASSWORD: password,
   EXPERIMENTAL_YOUTUBE: "true",
   DATA_DIR: root,
+  MEDIA_DIR: root,
+  FONT_FILE:
+    process.platform === "win32"
+      ? "C:/Windows/Fonts/arial.ttf"
+      : "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
 });
+await mkdir(path.join(root, "avatars"));
+await runCapture(
+  "ffmpeg",
+  [
+    "-y",
+    "-f",
+    "lavfi",
+    "-i",
+    "color=c=red:s=56x56",
+    "-frames:v",
+    "1",
+    path.join(root, "avatars", "avatar.png"),
+  ],
+  new AbortController().signal,
+);
 const db = new Store(":memory:");
 db.set("settings", { ...defaults, playlistId: "PL_fixture" });
 db.replace(
@@ -76,6 +97,48 @@ try {
     .waitFor();
   assert.equal(db.settings().playlistId, "PL_fixture");
   assert.equal(db.settings().mediaSource, "youtube-experimental");
+  await page.getByLabel("Video bitrate (kbps)").fill("3500");
+  await page.getByRole("button", { name: "Open overlay preview" }).click();
+  const editor = page.getByRole("dialog", { name: "Overlay preview" });
+  await editor
+    .getByLabel("Avatar filename", { exact: true })
+    .fill("avatar.png");
+  await editor.getByRole("slider", { name: "Text size" }).fill("48");
+  await editor
+    .getByRole("slider", { name: "Profile picture size" })
+    .fill("112");
+  await editor.getByText("Preview ready", { exact: true }).waitFor();
+  const previewImage = editor.getByAltText("Stream overlay preview");
+  await previewImage.waitFor();
+  assert.equal(
+    await previewImage.evaluate((img: HTMLImageElement) => img.naturalWidth),
+    1280,
+  );
+  assert.equal(
+    db.settings().overlay.avatarSize,
+    56,
+    "preview must not save until confirmed",
+  );
+  await page.screenshot({
+    path: path.join(screenshots, "overlay-editor.png"),
+    fullPage: false,
+  });
+  await editor
+    .getByRole("button", { name: "Save overlay", exact: true })
+    .click();
+  await page.getByText("Overlay settings saved.", { exact: true }).waitFor();
+  assert.equal(db.settings().overlay.fontSize, 48);
+  assert.equal(db.settings().overlay.avatarSize, 112);
+  assert.equal(
+    db.settings().bitrateKbps,
+    2500,
+    "overlay save must not persist unrelated drafts",
+  );
+  assert.equal(
+    await page.getByLabel("Video bitrate (kbps)").inputValue(),
+    "3500",
+    "overlay save must preserve unrelated drafts in the form",
+  );
   await page.getByRole("button", { name: "Overview", exact: true }).click();
   await page.setViewportSize({ width: 390, height: 844 });
   await page.screenshot({
@@ -89,6 +152,33 @@ try {
     "mobile should have no horizontal overflow",
   );
   await page.getByRole("button", { name: "Settings", exact: true }).click();
+  await page.getByRole("button", { name: "Open overlay preview" }).click();
+  await editor.getByText("Preview ready", { exact: true }).waitFor();
+  assert.equal(
+    await editor
+      .getByRole("slider", { name: "Profile picture size" })
+      .inputValue(),
+    "112",
+  );
+  await page.screenshot({
+    path: path.join(screenshots, "overlay-editor-mobile.png"),
+    fullPage: false,
+  });
+  assert.ok(
+    await editor.evaluate(
+      (element) => element.scrollWidth <= element.clientWidth,
+    ),
+    "mobile editor should not overflow horizontally",
+  );
+  await editor
+    .getByRole("slider", { name: "Profile picture size" })
+    .fill("150");
+  await editor.getByRole("button", { name: "Cancel", exact: true }).click();
+  assert.equal(
+    db.settings().overlay.avatarSize,
+    112,
+    "cancel must discard resizing",
+  );
   assert.ok(
     await page.evaluate(
       () => document.documentElement.scrollWidth <= window.innerWidth,

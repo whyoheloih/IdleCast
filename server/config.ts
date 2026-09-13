@@ -148,7 +148,8 @@ export const settingsSchema = z
           .string()
           .regex(/^(?:[A-Za-z0-9_-]+\.(?:png|jpg|jpeg))?$/)
           .default(""),
-        fontSize: z.number().int().min(16).max(36).default(24),
+        fontSize: z.number().int().min(12).max(96).default(24),
+        avatarSize: z.number().int().min(24).max(240).default(56),
         margin: z.number().int().min(8).max(100).default(28),
       })
       .strict()
@@ -157,6 +158,7 @@ export const settingsSchema = z
         title: "IdleCast",
         avatar: "",
         fontSize: 24,
+        avatarSize: 56,
         margin: 28,
       }),
   })

@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import type { Settings } from "../server/config";
 import type { StoredItem } from "../server/db";
+import { OverlayEditor } from "./OverlayEditor";
 import "./style.css";
 type Snapshot = {
   state: string;
@@ -78,7 +79,8 @@ function App() {
     [busy, setBusy] = useState(""),
     [connected, setConnected] = useState(false),
     [dirty, setDirty] = useState(false),
-    [loadingItems, setLoadingItems] = useState(false);
+    [loadingItems, setLoadingItems] = useState(false),
+    [overlayEditorOpen, setOverlayEditorOpen] = useState(false);
   const scroll = useRef<HTMLDivElement>(null);
   const virtual = useVirtualizer({
     count: items.length,
@@ -397,6 +399,12 @@ function App() {
                   <h2>
                     <Radio size={18} /> Now playing
                   </h2>
+                  <button
+                    type="button"
+                    onClick={() => setOverlayEditorOpen(true)}
+                  >
+                    Preview / resize overlay
+                  </button>
                   <span className="badge">
                     {state?.state === "playing" ? "PLAYING" : "STANDBY"}
                   </span>
@@ -722,6 +730,13 @@ function App() {
             <section className="panel form-panel">
               <span className="eyebrow">03 / ON-STREAM IDENTITY</span>
               <h2>A signature in the corner.</h2>
+              <button
+                type="button"
+                className="primary"
+                onClick={() => setOverlayEditorOpen(true)}
+              >
+                Open overlay preview
+              </button>
               <label className="toggle">
                 <input
                   type="checkbox"
@@ -770,8 +785,8 @@ function App() {
                   Text size
                   <input
                     type="number"
-                    min={16}
-                    max={36}
+                    min={12}
+                    max={96}
                     value={settings.overlay.fontSize}
                     onChange={(e) =>
                       change({
@@ -801,6 +816,10 @@ function App() {
                   />
                 </label>
               </div>
+              <p className="hint">
+                Profile picture size: {settings.overlay.avatarSize} px. Open the
+                preview to resize it independently.
+              </p>
             </section>
             <section className="panel form-panel">
               <span className="eyebrow">04 / QUALITY</span>
@@ -939,6 +958,21 @@ function App() {
           ) : (
             <div className="empty">Checking services…</div>
           ))}
+        {settings && (
+          <OverlayEditor
+            open={overlayEditorOpen}
+            value={settings.overlay}
+            canSave={state?.state === "stopped" && !state.syncing && !busy}
+            onClose={() => setOverlayEditorOpen(false)}
+            onSave={async (value) => {
+              const saved = await api("overlay", "PUT", value);
+              const next = { ...settings, overlay: saved.settings.overlay };
+              setSettings(next);
+              setDirty(JSON.stringify(next) !== JSON.stringify(saved.settings));
+              setNotice("Overlay settings saved.");
+            }}
+          />
+        )}
         <footer>
           <span>
             <Radio size={14} /> Your playlist. Always live.

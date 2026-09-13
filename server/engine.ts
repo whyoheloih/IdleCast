@@ -39,6 +39,19 @@ export class Engine extends EventEmitter {
   private resyncTimer: ReturnType<typeof setInterval>;
   private skipRequested = false;
   private closed = false;
+  private currentMedia: { file: string; duration: number } | null = null;
+  previewSource() {
+    if (this.state !== "playing" || !this.currentMedia || !this.clip)
+      return null;
+    return {
+      file: this.currentMedia.file,
+      offset: Math.max(
+        0,
+        Math.min(this.elapsed, this.currentMedia.duration - 0.1),
+      ),
+      signal: this.clip.signal,
+    };
+  }
   playlist: PlaylistProvider;
   constructor(
     public store: Store,
@@ -366,6 +379,7 @@ export class Engine extends EventEmitter {
             ),
           ];
           const child = launch(this.config.FFMPEG_PATH, args, clipSignal);
+          this.currentMedia = { file, duration };
           this.state = "playing";
           this.store.set("cursor", { id: item.id, offset });
           this.event();
@@ -433,6 +447,8 @@ export class Engine extends EventEmitter {
             );
           }
         } finally {
+          this.currentMedia = null;
+          this.clip?.abort();
           await idle.stop();
           this.clip = null;
         }

@@ -84,7 +84,9 @@ Credentials stay in the environment and are never returned by the admin API or i
 
 Dashboard settings are stored in SQLite. Defaults are 720p, 30 fps, 2500 kbps video, 128 kbps audio, and 15-minute playlist resync. Both destinations begin disabled. Stop playback before saving settings; sync is also serialized with settings updates.
 
-For an avatar, put `avatar.png` (or JPEG) in `media/avatars` and enter the filename in Settings. The overlay always sits bottom-left. Long titles are clipped conservatively to fit the frame. The dashboard shows an illustrative identity panel, not a decoded stream preview.
+For an avatar, put `avatar.png` (or JPEG) in `media/avatars` and enter the filename in Settings. Open **Overlay preview** from Settings, or **Preview / resize overlay** from Overview. Adjust the **Text size** (12–96 px) and **Profile picture size** (24–240 px) sliders independently; edge spacing is also adjustable. Choose **Save overlay** to persist just the overlay, or **Cancel** to discard the preview edits. Other unsaved settings remain intact.
+
+The preview uses the same FFmpeg overlay renderer as the broadcast. During playback it shows snapshots of the current video refreshed roughly every two seconds; while stopped/preparing it shows a standby canvas. It has no audio and is not a full-motion destination/player monitor. Previewing is available during playback, but saving requires stopped playback and no active sync. Draft renders never modify broadcast text files. The overlay stays bottom-left, with 65% background opacity and fully opaque text/picture. Long titles are clipped conservatively to fit the frame.
 
 ## Operational limits
 

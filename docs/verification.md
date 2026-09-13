@@ -5,9 +5,9 @@ IdleCast 1.0.0 was implemented from an empty repository. The detailed originatin
 ## Local verification
 
 - TypeScript strict checking and Vite production build.
-- Ten unit/API/FFmpeg tests covering configuration, playlist-link parsing, full pagination, duplicate videos, unavailable entries, transactional rollback, persistence across database reopen, hashed-session authentication, Origin enforcement, secret exclusion, adapter opt-in/cache behavior, cancellation, and reconnect backoff.
+- Twelve unit/API/FFmpeg tests covering configuration, playlist-link parsing, full pagination, duplicate videos, unavailable entries, transactional rollback, persistence across database reopen, hashed-session authentication, Origin enforcement, secret exclusion, adapter opt-in/cache behavior, cancellation, reconnect backoff, independent text/avatar scaling, and isolated authenticated preview rendering.
 - Real FFmpeg synthetic-media tests verify actual overlay pixels (65% background opacity and opaque avatar/text), multiple loop transitions with monotonic packet timestamps, a missing item, a deliberately failing second output, slow-media standby, all-unavailable standby, and stop/restart intent.
-- Browser verification signs in using a temporary random password, saves a YouTube playlist URL, renders/scrolls a virtualized 1,000-item fixture queue, checks desktop and 390px mobile layouts, and checks for browser runtime errors.
+- Browser verification signs in using a temporary random password, saves a YouTube playlist URL, renders/scrolls a virtualized 1,000-item fixture queue, checks desktop and 390px mobile layouts, and checks for browser runtime errors. It also resizes text and a real fixture avatar in the preview window, verifies save/cancel and persisted sizes, and confirms unrelated draft settings are preserved.
 - Desktop/mobile screenshots are test fixtures, not evidence of a live account broadcast.
 
 ## External verification boundaries
