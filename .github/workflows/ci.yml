@@ -1,0 +1,43 @@
+name: Verify
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: sudo apt-get update && sudo apt-get install -y ffmpeg fonts-dejavu-core
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+      - run: pnpm test
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm test:browser
+      - run: docker build -t idlecast:test .
+      - name: Container startup and restart smoke test
+        shell: bash
+        run: |
+          test_password=$(openssl rand -hex 24)
+          docker run -d --name idlecast-smoke --read-only --tmpfs /tmp --cap-drop ALL --security-opt no-new-privileges -v idlecast-smoke-data:/app/data -p 127.0.0.1:3000:3000 -e ADMIN_PASSWORD="$test_password" idlecast:test
+          wait_for_http() {
+            for attempt in $(seq 1 30); do
+              if [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/api/state)" = "401" ]; then return 0; fi
+              sleep 2
+            done
+            docker logs idlecast-smoke
+            return 1
+          }
+          wait_for_http
+          docker exec idlecast-smoke ffmpeg -version
+          docker exec idlecast-smoke yt-dlp --version
+          docker restart idlecast-smoke
+          wait_for_http
+          docker stop idlecast-smoke

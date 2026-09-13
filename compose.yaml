@@ -1,0 +1,30 @@
+services:
+  idlecast:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      HOST: 0.0.0.0
+      PORT: 3000
+      DATA_DIR: /app/data
+      MEDIA_DIR: /app/media
+      FONT_FILE: /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf
+    ports:
+      - "127.0.0.1:3000:3000"
+    volumes:
+      - idlecast-data:/app/data
+      - ./media:/app/media:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=128m,mode=1777
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+volumes:
+  idlecast-data:
