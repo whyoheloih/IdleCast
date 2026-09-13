@@ -12,6 +12,7 @@ export type PlaylistItem = {
   thumbnail: string;
   available: boolean;
   duration: number | null;
+  publishedAt?: string;
 };
 export interface PlaylistProvider {
   fetch(playlistId: string, signal: AbortSignal): Promise<PlaylistItem[]>;
@@ -30,6 +31,39 @@ export class YouTubePlaylistProvider implements PlaylistProvider {
     private key: string,
     private request: typeof fetch = fetch,
   ) {}
+  async channelUploads(value: string, signal: AbortSignal): Promise<string> {
+    let identifier = value.trim(),
+      kind = "forHandle";
+    if (identifier.startsWith("https://")) {
+      const url = new URL(identifier);
+      if (
+        !["youtube.com", "www.youtube.com", "m.youtube.com"].includes(
+          url.hostname,
+        )
+      )
+        throw new Error("Use a YouTube channel URL");
+      const parts = url.pathname.split("/").filter(Boolean);
+      if (parts[0] === "channel") {
+        kind = "id";
+        identifier = parts[1] ?? "";
+      } else if (parts[0] === "user") {
+        kind = "forUsername";
+        identifier = parts[1] ?? "";
+      } else if (parts[0]?.startsWith("@"))
+        identifier = decodeURIComponent(parts[0]);
+      else throw new Error("Use a channel @handle or /channel/ URL");
+    } else if (/^UC[A-Za-z0-9_-]{22}$/.test(identifier)) kind = "id";
+    if (!identifier || identifier.includes("/") || identifier.length > 100)
+      throw new Error("Invalid channel identifier");
+    const data = await this.get(
+      "channels",
+      { part: "contentDetails", [kind]: identifier },
+      signal,
+    );
+    const uploads = data.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
+    if (!uploads) throw new Error("Channel not found or uploads unavailable");
+    return uploads;
+  }
   private async get(
     resource: string,
     params: Record<string, string>,
@@ -113,6 +147,7 @@ export class YouTubePlaylistProvider implements PlaylistProvider {
         v.status?.privacyStatus !== "private" &&
         v.snippet?.liveBroadcastContent !== "live";
       item.duration = v ? parseDuration(v.contentDetails?.duration) : null;
+      item.publishedAt = v?.snippet?.publishedAt ?? "";
     }
     return items.sort((a, b) => a.position - b.position);
   }
@@ -164,9 +199,13 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
   constructor(
     private c: Config,
     private run: typeof runCapture = runCapture,
+    private quality: Pick<Settings, "height" | "fps"> = {
+      height: 720,
+      fps: 30,
+    },
   ) {}
   pin(id: string) {
-    this.pinned = id;
+    this.pinned = this.cacheName(id);
   }
   resolve(item: PlaylistItem, signal: AbortSignal): Promise<string> {
     signal = AbortSignal.any([signal, this.lifetime.signal]);
@@ -186,6 +225,9 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
     this.lifetime.abort();
     await this.queue;
   }
+  private cacheName(id: string) {
+    return `${id}.${this.quality.height}p${this.quality.fps}`;
+  }
   private async download(item: PlaylistItem, signal: AbortSignal) {
     if (!this.c.EXPERIMENTAL_YOUTUBE)
       throw new Error("Experimental YouTube source is disabled");
@@ -194,15 +236,22 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
     const root = path.join(this.c.DATA_DIR, "cache");
     await mkdir(root, { recursive: true });
     const limit = this.c.CACHE_MAX_MB * 1024 * 1024;
+    // Prune on cache hits too; keep only the playing and requested videos.
+    for (const name of await readdir(root))
+      if (!name.startsWith(this.pinned + ".") && !name.startsWith(this.cacheName(item.videoId) + "."))
+        await rm(path.join(root, name), { force: true });
     for (const ext of ["mp4", "mkv", "webm"])
       try {
-        return await containedFile(root, item.videoId + "." + ext);
+        return await containedFile(
+          root,
+          this.cacheName(item.videoId) + "." + ext,
+        );
       } catch {}
     // Keep only the playing file and next download. Each file may consume at most half the cache.
     for (const name of await readdir(root))
       if (
         !name.startsWith(this.pinned + ".") &&
-        !name.startsWith(item.videoId + ".")
+        !name.startsWith(this.cacheName(item.videoId) + ".")
       )
         await rm(path.join(root, name), { force: true });
     try {
@@ -212,10 +261,9 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
           "--ignore-config",
           "--no-playlist",
           "--no-progress",
-          "--no-warnings",
           "--no-cache-dir",
           "--js-runtimes",
-          "node",
+          "node:" + process.execPath,
           "--max-filesize",
           String(Math.floor(limit / 2)),
           "--socket-timeout",
@@ -229,14 +277,16 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
           "--merge-output-format",
           "mp4",
           "-f",
-          "bv*[height<=720]+ba/b[height<=720]",
+          `bv*[height<=${this.quality.height}]+ba/b[height<=${this.quality.height}]`,
+          "-S",
+          `res:${this.quality.height},fps:${this.quality.fps}`,
           "-o",
-          path.join(root, item.videoId + ".%(ext)s"),
+          path.join(root, this.cacheName(item.videoId) + ".%(ext)s"),
           "--",
           "https://www.youtube.com/watch?v=" + item.videoId,
         ],
         signal,
-        600000,
+        21600000,
         async () => {
           let size = 0;
           for (const name of await readdir(root)) {
@@ -251,20 +301,29 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
       );
     } catch (e) {
       for (const name of await readdir(root))
-        if (name.startsWith(item.videoId + "."))
+        if (name.startsWith(this.cacheName(item.videoId) + "."))
           await rm(path.join(root, name), { force: true });
       throw e;
     }
-    for (const ext of ["mp4", "mkv", "webm"])
+    for (const ext of ["mp4", "mkv", "webm"]) {
+      let file: string;
       try {
-        const file = await containedFile(root, item.videoId + "." + ext);
-        if ((await stat(file)).size > limit / 2) {
-          await rm(file);
-          throw new Error("Media exceeds per-item cache limit");
-        }
-        return file;
-      } catch {}
-    throw new Error("Experimental adapter did not return a playable file");
+        file = await containedFile(
+          root,
+          this.cacheName(item.videoId) + "." + ext,
+        );
+      } catch {
+        continue;
+      }
+      if ((await stat(file)).size > limit / 2) {
+        await rm(file);
+        throw new Error("Media exceeds per-item cache limit");
+      }
+      return file;
+    }
+    throw new Error(
+      "Download produced no merged media; check FFmpeg location and per-video cache limit",
+    );
   }
 }
 export class RtmpOutput implements StreamOutputProvider {

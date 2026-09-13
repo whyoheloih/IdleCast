@@ -185,6 +185,41 @@ try {
     ),
     "mobile settings should have no horizontal overflow",
   );
+  await page.getByLabel("Queue source").selectOption("channel");
+  await page
+    .getByLabel("YouTube channel URL or @handle")
+    .fill("https://www.youtube.com/@Example");
+  await page
+    .getByLabel("Exclude title words or phrases (one per line)")
+    .fill("Trailer\nAnnouncement");
+  await page.getByLabel("Shuffle", {exact:true}).check();
+  await page.getByLabel("Resolution", { exact: true }).selectOption("1080");
+  await page.getByLabel("Frame rate", { exact: true }).selectOption("60");
+  await page
+    .getByRole("button", { name: "Save settings", exact: true })
+    .click();
+  await page
+    .getByText("Settings saved. Sync your playlist to refresh the queue.")
+    .waitFor();
+  assert.equal(db.settings().sourceMode, "channel");
+  assert.equal(db.settings().shuffle, true);
+  assert.deepEqual(db.settings().excludedWords, ["Trailer", "Announcement"]);
+  assert.equal(db.settings().height, 1080);
+  assert.equal(db.settings().fps, 60);
+  await page
+    .getByLabel("YouTube API key", { exact: true })
+    .fill("browser-secret-test");
+  await page
+    .getByRole("button", { name: "Save credentials", exact: true })
+    .click();
+  await page
+    .getByText("Credentials saved and applied. No restart needed.")
+    .waitFor();
+  assert.equal(c.YOUTUBE_API_KEY, "browser-secret-test");
+  assert.equal(
+    await page.getByLabel("YouTube API key", { exact: true }).inputValue(),
+    "",
+  );
   assert.deepEqual(errors, []);
   console.log(
     "Browser verification passed: login, playlist-link save, 1000-row virtualization, desktop and mobile layout, no runtime errors.",

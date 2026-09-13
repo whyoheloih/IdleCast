@@ -54,7 +54,7 @@ test("preview uses real source frames, scales avatar and text independently, and
         "-f",
         "lavfi",
         "-i",
-        "color=c=white:s=1280x720",
+        "color=c=gray:s=1280x720",
         "-t",
         "1",
         "-c:v",

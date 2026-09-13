@@ -1,5 +1,18 @@
 import { z } from "zod";
 import path from "node:path";
+import { existsSync } from "node:fs";
+import { youtubeWatchId } from "./youtube-viewer.js";
+
+export function executablePath(value: string): string {
+  if (path.isAbsolute(value) || /[\\/]/.test(value)) return path.resolve(value);
+  for (const dir of (process.env.PATH ?? "").split(path.delimiter)) {
+    for (const ext of process.platform === "win32" ? ["", ".exe"] : [""]) {
+      const candidate = path.resolve(dir.replace(/^"|"$/g, ""), value + ext);
+      if (existsSync(candidate)) return candidate;
+    }
+  }
+  return value;
+}
 
 const bool = z
   .enum(["true", "false"])
@@ -76,6 +89,9 @@ export function readConfig(env: NodeJS.ProcessEnv): Config {
     throw new Error("Remote access requires HTTPS and COOKIE_SECURE=true");
   c.DATA_DIR = path.resolve(c.DATA_DIR);
   c.MEDIA_DIR = path.resolve(c.MEDIA_DIR);
+  c.FFMPEG_PATH = executablePath(c.FFMPEG_PATH);
+  c.FFPROBE_PATH = executablePath(c.FFPROBE_PATH);
+  c.YTDLP_PATH = executablePath(c.YTDLP_PATH);
   return c;
 }
 const destination = (platform: "youtube" | "twitch") =>
@@ -115,6 +131,18 @@ const destination = (platform: "youtube" | "twitch") =>
     .strict();
 export const settingsSchema = z
   .object({
+    sourceMode: z.enum(["playlist", "channel"]).default("playlist"),
+    sources: z.array(z.object({ kind: z.enum(["playlist", "channel"]), value: z.string().trim().min(1).max(2048) }).strict()).max(100).default([]),
+    youtubeWatchId: z.string().max(2048).transform((value,ctx)=>{
+      try {return youtubeWatchId(value);} catch(error) {ctx.addIssue({code:"custom",message:(error as Error).message});return z.NEVER;}
+    }).default(""),
+    channelUrl: z.string().max(2048).default(""),
+    excludedWords: z
+      .array(z.string().trim().max(100))
+      .max(100)
+      .transform((words) => words.filter(Boolean))
+      .default([]),
+    shuffle: z.boolean().default(false),
     playlistId: z
       .string()
       .max(2048)
@@ -134,16 +162,16 @@ export const settingsSchema = z
       .enum(["local", "youtube-experimental"])
       .default("youtube-experimental"),
     resyncMinutes: z.number().int().min(5).max(1440).default(15),
-    width: z.literal(1280).default(1280),
-    height: z.literal(720).default(720),
-    fps: z.union([z.literal(24), z.literal(30)]).default(30),
+    width: z.union([z.literal(1280), z.literal(1920)]).default(1280),
+    height: z.union([z.literal(720), z.literal(1080)]).default(720),
+    fps: z.union([z.literal(24), z.literal(30), z.literal(60)]).default(30),
     bitrateKbps: z.number().int().min(500).max(6000).default(2500),
     youtube: destination("youtube"),
     twitch: destination("twitch"),
     overlay: z
       .object({
         enabled: z.boolean().default(true),
-        title: z.string().max(100).default("IdleCast"),
+        title: z.string().max(500).default("IdleCast"),
         avatar: z
           .string()
           .regex(/^(?:[A-Za-z0-9_-]+\.(?:png|jpg|jpeg))?$/)
@@ -162,7 +190,13 @@ export const settingsSchema = z
         margin: 28,
       }),
   })
-  .strict();
+  .strict()
+  .refine(
+    (s) =>
+      (s.width === 1280 && s.height === 720) ||
+      (s.width === 1920 && s.height === 1080),
+    { message: "Choose 1280 × 720 or 1920 × 1080", path: ["height"] },
+  );
 export type Settings = z.infer<typeof settingsSchema>;
 export const defaults: Settings = settingsSchema.parse({
   youtube: {},

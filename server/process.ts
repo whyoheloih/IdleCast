@@ -1,4 +1,26 @@
 import { spawn, type ChildProcess } from "node:child_process";
+const diagnostics = new WeakMap<ChildProcess, string>();
+export function mediaFailure(child: ChildProcess): string {
+  const text = diagnostics.get(child) ?? "";
+  if (/ffmpeg-location.*does not exist|ffmpeg is not installed/i.test(text))
+    return "FFmpeg location is invalid; audio and video could not be merged";
+  if (/sign in|confirm.*bot|cookies|login required/i.test(text))
+    return "YouTube requires account verification for this request";
+  if (/403|forbidden/i.test(text))
+    return "YouTube media request denied (HTTP 403)";
+  if (/429|too many requests/i.test(text))
+    return "YouTube rate limit reached; retry later";
+  if (/max.filesize|larger than|file.*too large/i.test(text))
+    return "Video exceeds the configured per-video cache limit";
+  if (/No space left|disk full/i.test(text)) return "Media disk is full";
+  if (/font|drawtext/i.test(text))
+    return "Overlay font or text filter could not load";
+  if (/No such file|Invalid argument|Error opening/i.test(text))
+    return "Media file, executable path, or encoder input is invalid";
+  if (/Requested format.*not available/i.test(text))
+    return "YouTube has no matching playable format";
+  return "Media tool failed; check executable paths, source access, and selected quality";
+}
 export function launch(
   binary: string,
   args: string[],
@@ -11,7 +33,13 @@ export function launch(
     detached: process.platform !== "win32",
     stdio: ["ignore", "pipe", "pipe"],
   });
-  child.stderr?.resume(); // Never expose third-party output: it may contain credentials.
+  // Retain a bounded diagnostic privately; only fixed classifications reach logs.
+  child.stderr?.on("data", (b) =>
+    diagnostics.set(
+      child,
+      ((diagnostics.get(child) ?? "") + String(b)).slice(-8192),
+    ),
+  );
   const abort = () => terminate(child);
   signal.addEventListener("abort", abort, { once: true });
   child.once("close", () => signal.removeEventListener("abort", abort));
@@ -53,6 +81,7 @@ export async function runCapture(
   const child = launch(binary, args, combined);
   let output = "";
   let checking = false;
+  let failureReason = "Media operation timed out";
   child.stdout?.on("data", (chunk) => {
     if (output.length < 1048576) output += String(chunk);
     else bounded.abort();
@@ -63,7 +92,11 @@ export async function runCapture(
         if (checking) return;
         checking = true;
         check()
-          .catch(() => bounded.abort())
+          .catch(() => {
+            failureReason =
+              "Media cache limit exceeded or cache storage is unavailable";
+            bounded.abort();
+          })
           .finally(() => {
             checking = false;
           });
@@ -71,8 +104,10 @@ export async function runCapture(
     : undefined;
   try {
     const code = await completion(child);
+    if (bounded.signal.aborted && !signal.aborted)
+      throw new Error(failureReason);
     combined.throwIfAborted();
-    if (code !== 0) throw new Error("Media tool failed");
+    if (code !== 0) throw new Error(mediaFailure(child));
     return output;
   } finally {
     clearTimeout(timer);

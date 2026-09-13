@@ -192,7 +192,7 @@ export function OverlayEditor({
             Show overlay
           </label>
           <label>
-            Channel title
+            Standby / preview title
             <input
               value={draft.title}
               maxLength={100}
@@ -256,7 +256,9 @@ export function OverlayEditor({
             />
           </div>
           <p className="hint">
-            Background opacity stays at 65%. Text and picture stay fully opaque.
+            White text with a black outline; no background box. During playback,
+            the current video title is used. The avatar is cropped to a square
+            without stretching.
           </p>
           <button
             type="button"

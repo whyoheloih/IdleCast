@@ -9,7 +9,7 @@ export function encodeArgs(
   const destinations = (["youtube", "twitch"] as const).flatMap((name, n) =>
     s[name].enabled
       ? [
-          "[f=mpegts:onfail=ignore]udp://127.0.0.1:" +
+          "[f=mpegts:mpegts_flags=+initial_discontinuity:onfail=ignore]udp://127.0.0.1:" +
             (basePort + n) +
             "?pkt_size=1316",
         ]
@@ -45,7 +45,7 @@ export function encodeArgs(
     "-ac",
     "2",
     "-af",
-    "aresample=async=1:first_pts=0",
+    "aresample=48000:async=0,asetpts=N/SR/TB",
     "-output_ts_offset",
     String(offset),
     "-f",

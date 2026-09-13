@@ -16,10 +16,12 @@ import { Store } from "./db.js";
 import { Engine } from "./engine.js";
 import { runCapture } from "./process.js";
 import { OverlayPreview } from "./preview.js";
+import { credentialStore } from "./credentials.js";
 const digest = (token: string) =>
   createHash("sha256").update(token).digest("hex");
 export function createApp(c: Config, store: Store, engine: Engine) {
   const app = express();
+  const saveCredentials = credentialStore(c, store);
   const preview = new OverlayPreview(c);
   app.disable("x-powered-by");
   store.db.exec("DELETE FROM sessions"); // Password/environment changes invalidate existing sessions.
@@ -33,7 +35,7 @@ export function createApp(c: Config, store: Store, engine: Engine) {
       "Referrer-Policy": "no-referrer",
       "X-Frame-Options": "DENY",
       "Content-Security-Policy":
-        "default-src 'self'; img-src 'self' https://i.ytimg.com data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+        "default-src 'self'; img-src 'self' https://i.ytimg.com data: blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-src https://www.youtube-nocookie.com; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
     });
     next();
   });
@@ -137,13 +139,48 @@ export function createApp(c: Config, store: Store, engine: Engine) {
     res.json({ ok: true });
   });
   app.get("/api/state", (_req, res) => res.json(engine.snapshot()));
+  app.put("/api/viewer", (req,res)=>{
+    const parsed=z.object({youtubeWatchId:settingsSchema.shape.youtubeWatchId}).strict().safeParse(req.body);
+    if(!parsed.success){res.status(400).json({error:"Enter a valid YouTube broadcast watch link or video ID"});return;}
+    store.set("settings",{...store.settings(),youtubeWatchId:parsed.data.youtubeWatchId});
+    res.json({youtubeWatchId:parsed.data.youtubeWatchId});
+  });
+  app.put("/api/credentials", (req, res) => {
+    if (engine.state !== "stopped" || engine.syncing) {
+      res.status(409).json({
+        error: "Stop playback and wait for sync before saving credentials",
+      });
+      return;
+    }
+    const value = z
+      .string()
+      .trim()
+      .min(1)
+      .max(512)
+      .regex(/^[^\s\x00-\x1f]+$/)
+      .nullable()
+      .optional();
+    const parsed = z
+      .object({
+        YOUTUBE_API_KEY: value,
+        YOUTUBE_STREAM_KEY: value,
+        TWITCH_STREAM_KEY: value,
+      })
+      .strict()
+      .safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Enter valid keys without spaces" });
+      return;
+    }
+    saveCredentials(parsed.data);
+    engine.event("Credentials updated");
+    res.json({ ok: true });
+  });
   app.put("/api/overlay", (req, res) => {
     if (engine.state !== "stopped" || engine.syncing) {
-      res
-        .status(409)
-        .json({
-          error: "Stop playback and wait for sync before saving the overlay",
-        });
+      res.status(409).json({
+        error: "Stop playback and wait for sync before saving the overlay",
+      });
       return;
     }
     const parsed = settingsSchema.shape.overlay.safeParse(req.body);
@@ -175,7 +212,15 @@ export function createApp(c: Config, store: Store, engine: Engine) {
     try {
       const source = engine.previewSource();
       const frame = await preview.render(
-        { ...store.settings(), overlay: parsed.data },
+        {
+          ...store.settings(),
+          overlay: {
+            ...parsed.data,
+            title: source
+              ? (engine.current?.title ?? parsed.data.title)
+              : parsed.data.title,
+          },
+        },
         source,
         controller.signal,
       );
@@ -233,10 +278,19 @@ export function createApp(c: Config, store: Store, engine: Engine) {
       });
       return;
     }
-    if (parsed.data.playlistId !== store.settings().playlistId) {
+    const previous = store.settings();
+    if (
+      parsed.data.playlistId !== previous.playlistId ||
+      parsed.data.sourceMode !== previous.sourceMode ||
+      parsed.data.channelUrl !== previous.channelUrl ||
+      parsed.data.shuffle !== previous.shuffle ||
+      JSON.stringify(parsed.data.excludedWords) !==
+        JSON.stringify(previous.excludedWords)
+    ) {
       store.replace([]);
       store.set("cursor", null);
       store.set("lastSync", 0);
+      store.set("excludedCount", 0);
     }
     store.set("settings", parsed.data);
     engine.event("Settings updated");

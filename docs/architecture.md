@@ -34,7 +34,7 @@ Repository architecture → validated configuration → official YouTube paginat
 
 A single supervisor selects the durable cursor identity, seeks to the checkpoint, skips unavailable or cooling-down items, and loops. Checkpoints use encoded frame count every five seconds, so globally offset stream timestamps do not corrupt the per-item cursor.
 
-Each item is normalized to 720p H.264/AAC MPEG-TS and fanned out over loopback UDP to persistent copy-only FFmpeg workers. A monotonic session offset bridges encoders; workers regenerate timestamps. UDP buffers bound slow-destination backpressure. Output failures retry at 1/2/4/8/16/30 seconds, capped at 30 seconds. Media and output progress watchdogs terminate stalled children.
+Each item is normalized to the selected 720p or 1080p output at 24, 30, or 60 fps using H.264/AAC MPEG-TS and fanned out over loopback UDP to persistent copy-only FFmpeg workers. A monotonic session offset bridges encoders; workers regenerate timestamps. UDP buffers bound slow-destination backpressure. Output failures retry at 1/2/4/8/16/30 seconds, capped at 30 seconds. Media and output progress watchdogs terminate stalled children.
 
 A branded standby encoder runs during slow preparation or when all items are unavailable. Switching waits for the old encoder to stop before starting another. Transitions may contain short gaps; this is not frame-perfect playout. No automatic claim of live viewer visibility is made.
 

@@ -63,11 +63,14 @@ test("experimental adapter is opt-in, uses YouTube media URLs, deduplicates down
     assert.equal(calls, 2);
     assert.equal((await readdir(path.join(root, "cache"))).length, 2);
     source.pin(b.videoId);
+    await source.resolve(b, signal);
+    assert.deepEqual(await readdir(path.join(root,"cache")), [b.videoId + ".720p30.mp4"]);
+    assert.equal(calls,2,"cache cleanup must not redownload a hit");
     await source.resolve(d, signal);
     const names = await readdir(path.join(root, "cache"));
-    assert.ok(names.includes(b.videoId + ".mp4"));
-    assert.ok(names.includes(d.videoId + ".mp4"));
-    assert.ok(!names.includes(a.videoId + ".mp4"));
+    assert.ok(names.includes(b.videoId + ".720p30.mp4"));
+    assert.ok(names.includes(d.videoId + ".720p30.mp4"));
+    assert.ok(!names.includes(a.videoId + ".720p30.mp4"));
     const abort = new AbortController();
     const pending = withCancellation(new Promise(() => {}), abort.signal);
     abort.abort();

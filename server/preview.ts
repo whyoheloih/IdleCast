@@ -8,6 +8,8 @@ export type PreviewSource = {
   file: string;
   offset: number;
   signal: AbortSignal;
+  title?: string;
+  publishedAt?: string;
 };
 
 // A single bounded render per instance prevents a preview from exhausting a small VPS.
@@ -48,7 +50,7 @@ export class OverlayPreview {
     await mkdir(root, { recursive: true });
     const directory = await mkdtemp(path.join(root, "frame-"));
     try {
-      const ov = await overlay(this.config, settings, directory);
+      const ov = await overlay(this.config, source?.title ? {...settings, overlay: {...settings.overlay, title: source.title}} : settings, directory, source?.publishedAt);
       const timeout = new AbortController();
       const combined = AbortSignal.any([signal, timeout.signal]);
       const child = launch(

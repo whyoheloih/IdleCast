@@ -2,7 +2,7 @@
 
 **Your playlist. Always live.**
 
-A self-hosted, single-owner livestream control room. Paste a **YouTube playlist link**, sync its order, and broadcast continuously to YouTube Live, Twitch, or both.
+A self-hosted, single-owner livestream control room. Paste a **YouTube playlist link or channel URL**, sync the queue, and broadcast continuously to YouTube Live, Twitch, or both.
 
 IdleCast uses the **official YouTube Data API for metadata and ordering only**. Video/audio is fetched separately by an **experimental yt-dlp MediaSourceProvider**. You do not need to supply local video files for the primary workflow. Local files are an optional adapter for media you already have.
 
@@ -11,10 +11,12 @@ IdleCast uses the **official YouTube Data API for metadata and ordering only**. 
 - Complete YouTube playlist pagination, duplicate entries, original ordering, scheduled/manual resync, and atomic snapshots.
 - SQLite migrations, durable playback intent and cursor, five-second progress checkpoints, restart recovery, per-item failure cooldowns, and continuous looping.
 - A bounded media cache, next-item prefetch, and a branded standby stream while downloads are slow or all items are temporarily unavailable.
-- One 720p H.264/AAC encode shared by independent RTMPS output workers, capped reconnect backoff, and progress watchdogs.
-- Configurable bottom-left channel title/avatar overlay: **65% background opacity; fully opaque image and text**.
+- Selectable 720p or 1080p H.264/AAC output at 24, 30, or 60 fps, shared by independent RTMPS output workers.
+- Current video title in the bottom-left: **white text with a black outline and no background rectangle**. Avatars use a proportional center crop to fill a square.
+- Channel uploads, case-insensitive title exclusion phrases, and shuffle that creates a new order on each sync.
+- In-app API/stream-key fields with encrypted storage and immediate application while playback is stopped; environment credentials remain a fallback.
 - Responsive dark React/TypeScript/Tailwind dashboard with setup/settings, virtualized playlist, live SSE updates, event logs, and health checks.
-- Single-admin authentication, hashed sessions, origin checks, login throttling, strict configuration validation, and environment-only credentials.
+- Single-admin authentication, hashed sessions, origin checks, login throttling, strict configuration validation, and masked credentials.
 - Docker deployment, bounded container logs, unit/API tests, real FFmpeg integration tests, and browser tests.
 
 ## Quick start with Docker
@@ -64,7 +66,19 @@ The data volume is owned by container user UID 1000. A new named volume is initi
 
 ## Configuration
 
-Credentials stay in the environment and are never returned by the admin API or included in logs. The dashboard only reports whether a key is configured. Restart/recreate after changing environment values. Sessions expire after 24 hours and are invalidated on service startup.
+### Desktop setup and queue controls
+
+On Windows, run `Start-IdleCast.ps1`. Use `Start-IdleCast.ps1 -Restart` to stop playback and reload environment changes; simply opening the app does not restart an existing server. The installed E: drive launchers are `E:\IdleCast\Start IdleCast.cmd` and `E:\IdleCast\Restart IdleCast.cmd`.
+
+In Settings, choose Playlist or Entire YouTube channel. Channel input accepts `https://www.youtube.com/@handle`, `/channel/UC…`, legacy `/user/name`, a channel ID, or an @handle. Legacy `/c/` vanity URLs should be replaced with the channel's @handle URL. Exclusion phrases match anywhere in a title, ignoring capitalization. Enter one phrase per line. Shuffle randomizes the filtered queue on manual or scheduled sync; the resulting order repeats until the next sync. Changing source, exclusions, or shuffle clears the old queue and requires a fresh sync.
+
+Use the Credentials section to save YouTube API, YouTube stream, and Twitch stream keys. Stop playback and wait for sync first. Blank fields preserve current values; “Use .env credentials instead” removes saved overrides. Saved keys use AES-256-GCM encryption in SQLite, with a separate host key in `data/credentials.key`. Back up the database and that key together. The owning OS user can access both; this does not protect against a compromised host. Keys are never returned by the API or written into logs. In-app changes take effect without a server restart.
+
+The overlay uses the actual video title during playback; the editable title is a standby/preview fallback. Save output quality before previewing it. Source resolution/frame rate cannot be increased beyond the original detail or motion. The preview remains periodic snapshots, not a full-motion player.
+
+Downloads use resolved FFmpeg paths and the running Node executable for YouTube JavaScript challenges. The full video must download and merge before playback. Long downloads have a six-hour maximum; the cache monitor still enforces the overall budget. With `CACHE_MAX_MB=65536`, the per-video limit is 32 GiB. Safe diagnostic categories now distinguish merge/path, access, format, and cache problems without exposing raw third-party output.
+
+Credentials come from encrypted in-app storage or the environment fallback and are never returned by the admin API or included in logs. The dashboard only reports whether a key is configured. Restart/recreate after changing environment values; in-app credential saves apply immediately. Sessions expire after 24 hours and are invalidated on service startup.
 
 | Environment variable                        | Purpose / default                                                         |
 | ------------------------------------------- | ------------------------------------------------------------------------- |
@@ -86,7 +100,7 @@ Dashboard settings are stored in SQLite. Defaults are 720p, 30 fps, 2500 kbps vi
 
 For an avatar, put `avatar.png` (or JPEG) in `media/avatars` and enter the filename in Settings. Open **Overlay preview** from Settings, or **Preview / resize overlay** from Overview. Adjust the **Text size** (12–96 px) and **Profile picture size** (24–240 px) sliders independently; edge spacing is also adjustable. Choose **Save overlay** to persist just the overlay, or **Cancel** to discard the preview edits. Other unsaved settings remain intact.
 
-The preview uses the same FFmpeg overlay renderer as the broadcast. During playback it shows snapshots of the current video refreshed roughly every two seconds; while stopped/preparing it shows a standby canvas. It has no audio and is not a full-motion destination/player monitor. Previewing is available during playback, but saving requires stopped playback and no active sync. Draft renders never modify broadcast text files. The overlay stays bottom-left, with 65% background opacity and fully opaque text/picture. Long titles are clipped conservatively to fit the frame.
+The preview uses the same FFmpeg overlay renderer as the broadcast. During playback it shows snapshots of the current video refreshed roughly every two seconds; while stopped/preparing it shows a standby canvas. It has no audio and is not a full-motion destination/player monitor. Previewing is available during playback, but saving requires stopped playback and no active sync. Draft renders never modify broadcast text files. The overlay stays bottom-left with outlined white text and no background rectangle. Long titles are clipped conservatively to fit the frame.
 
 ## Operational limits
 
@@ -98,7 +112,7 @@ The preview uses the same FFmpeg overlay renderer as the broadcast. During playb
 - Brief timestamp/decoder transitions and network outages remain possible. Standby is not an uptime guarantee. Output “sending” means FFmpeg reports progress; it does not prove viewers can watch.
 - One process and one data volume per installation. Horizontal replicas are unsupported.
 - A host administrator or the owning OS user can inspect environment/process memory and FFmpeg arguments. Treat the host as trusted. IdleCast avoids putting those secrets in browser responses and diagnostics.
-- No live account credentials were used during local verification. Real YouTube extraction, account ingest, and long-duration VPS soak testing require your environment.
+- Public YouTube downloads and local encoding were verified with short and multi-hour videos. Viewer playback through a live YouTube/Twitch destination and long-duration VPS soak testing remain unverified.
 
 ## Lightweight VPS guidance
 

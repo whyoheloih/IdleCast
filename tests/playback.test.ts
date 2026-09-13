@@ -25,7 +25,7 @@ const font =
     ? "C:/Windows/Fonts/arial.ttf"
     : "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
 const signal = () => new AbortController().signal;
-test("FFmpeg overlay has 65% background opacity with opaque avatar and text", async () => {
+test("FFmpeg overlay has no background box and has outlined text with an opaque square avatar", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "idlecast-overlay-"));
   try {
     await mkdir(path.join(root, "avatars"));
@@ -37,7 +37,7 @@ test("FFmpeg overlay has 65% background opacity with opaque avatar and text", as
         "-f",
         "lavfi",
         "-i",
-        "color=c=red:s=56x56",
+        "color=c=black:s=112x56,drawbox=x=42:y=14:w=28:h=28:color=red:t=fill",
         "-frames:v",
         "1",
         avatar,
@@ -93,10 +93,10 @@ test("FFmpeg overlay has 65% background opacity with opaque avatar and text", as
     ];
     const bg = rgb(30, 620);
     assert.ok(
-      bg.every((v) => v > 75 && v < 105),
-      "background should be approximately 35% white: " + bg,
+      bg.every((v) => v > 245),
+      "background must remain unchanged: " + bg,
     );
-    const red = rgb(50, 650);
+    const red = rgb(60, 650);
     assert.ok(
       red[0] > 235 && red[1] < 20 && red[2] < 20,
       "avatar stays opaque: " + red,
@@ -105,12 +105,27 @@ test("FFmpeg overlay has 65% background opacity with opaque avatar and text", as
       rgb(10, 10).every((v) => v > 245),
       "outside overlay remains unchanged",
     );
-    let white = 0;
+    let white = 0,
+      black = 0;
     for (let y = 630; y < 680; y++)
       for (let x = 120; x < 400; x++) {
         if (rgb(x, y).every((v) => v > 240)) white++;
+        if (rgb(x, y).every((v) => v < 30)) black++;
       }
     assert.ok(white > 30, "text remains fully opaque");
+    assert.ok(black > 30, "text has a visible black outline");
+    const redPoints = [];
+    for (let y = 620; y < 692; y++)
+      for (let x = 28; x < 110; x++)
+        if (rgb(x, y)[0] > 230 && rgb(x, y)[1] < 25) redPoints.push([x, y]);
+    const xs = redPoints.map((p) => p[0]),
+      ys = redPoints.map((p) => p[1]);
+    assert.ok(
+      Math.abs(
+        Math.max(...xs) - Math.min(...xs) - (Math.max(...ys) - Math.min(...ys)),
+      ) <= 2,
+      "a square inside a wide avatar must stay square",
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -230,7 +245,7 @@ test("real FFmpeg loop skips unavailable files, survives one failed output, and 
     }
     const logs = db.logs() as any[];
     assert.ok(
-      logs.some((l) => l.message.startsWith("Item unavailable")),
+      logs.some((l) => l.message.startsWith("Media failed: missing")),
       "missing media should be skipped",
     );
     assert.ok(
@@ -242,6 +257,10 @@ test("real FFmpeg loop skips unavailable files, survives one failed output, and 
       "failed output should reconnect independently",
     );
     await engine.stop(true);
+    assert.match(
+      await readFile(path.join(root, "overlay", "title.txt"), "utf8"),
+      /^(first|second)$/,
+    );
     assert.equal(db.get("desired", false), true);
     assert.equal(engine.state, "stopped");
     assert.ok((await stat(received)).size > 10000);

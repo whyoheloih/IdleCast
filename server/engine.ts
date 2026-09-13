@@ -10,7 +10,16 @@ import {
   type MediaSourceProvider,
   type StreamOutputProvider,
 } from "./providers.js";
-import { launch, completion, runCapture, delay, backoff } from "./process.js";
+import {
+  launch,
+  completion,
+  runCapture,
+  delay,
+  backoff,
+  mediaFailure,
+} from "./process.js";
+import { prepareQueue, isLongVideo } from "./queue.js";
+import { playlistId as parsePlaylistId } from "./config.js";
 import { overlay } from "./overlay.js";
 import { encodeArgs, standby } from "./encoder.js";
 export type OutputState = {
@@ -50,6 +59,8 @@ export class Engine extends EventEmitter {
         Math.min(this.elapsed, this.currentMedia.duration - 0.1),
       ),
       signal: this.clip.signal,
+      title: this.current?.title,
+      publishedAt: this.current ? this.store.get<Record<string,string>>("uploadDates", {})[this.current.videoId] : "",
     };
   }
   playlist: PlaylistProvider;
@@ -65,7 +76,7 @@ export class Engine extends EventEmitter {
     this.resyncTimer = setInterval(() => {
       const s = store.settings();
       if (
-        s.playlistId &&
+        (s.sources.length || (s.sourceMode === "channel" ? s.channelUrl : s.playlistId)) &&
         Date.now() - store.get("lastSync", 0) > s.resyncMinutes * 60000
       )
         void this.sync().catch(() => {});
@@ -78,28 +89,54 @@ export class Engine extends EventEmitter {
   snapshot() {
     return {
       state: this.state,
-      current: this.current,
+      current: this.current ? {...this.current, publishedAt: this.store.get<Record<string,string>>("uploadDates", {})[this.current.videoId]} : null,
       elapsed: this.elapsed,
       outputs: this.outputs,
       syncing: this.syncing,
       count: this.store.count(),
       lastSync: this.store.get("lastSync", 0),
       desired: this.store.get("desired", false),
+      excluded: this.store.get("excludedCount", 0),
     };
   }
   sync(): Promise<void> {
     if (this.closed)
       return Promise.reject(new Error("Service is shutting down"));
     if (this.syncTask) return this.syncTask;
-    const id = this.store.settings().playlistId;
-    if (!id) return Promise.reject(new Error("Configure a playlist first"));
+    const settings = this.store.settings();
+    const id =
+      settings.sourceMode === "channel"
+        ? settings.channelUrl
+        : settings.playlistId;
+    if (!id && !settings.sources.length) return Promise.reject(new Error("Configure a playlist or channel first"));
     this.syncing = true;
     this.event();
     this.syncTask = (async () => {
       try {
-        const items = await this.playlist.fetch(id, this.syncAbort.signal);
-        this.store.replace(items);
-        this.event("Playlist synchronized: " + items.length + " items");
+        const provider =
+          this.dependencies.playlist ??
+          new YouTubePlaylistProvider(this.config.YOUTUBE_API_KEY);
+        const sources = settings.sources.length ? settings.sources : [{kind: settings.sourceMode, value: id}];
+        const unique = new Map<string, StoredItem>();
+        for (const source of sources) {
+          const playlistId = source.kind === "channel"
+            ? await new YouTubePlaylistProvider(this.config.YOUTUBE_API_KEY).channelUploads(source.value, this.syncAbort.signal)
+            : parsePlaylistId(source.value);
+          for (const item of await provider.fetch(playlistId, this.syncAbort.signal))
+            if (!unique.has(item.videoId)) unique.set(item.videoId, item as StoredItem);
+        }
+        const fetched = [...unique.values()];
+        const queue = prepareQueue(fetched, settings);
+        this.store.replace(queue.items);
+        this.store.set("uploadDates", Object.fromEntries(fetched.map((item) => [item.videoId, item.publishedAt ?? ""])));
+        this.store.set("excludedCount", queue.excluded);
+        this.event(
+          "Playlist synchronized: " +
+            queue.items.length +
+            " items; " +
+            queue.excluded +
+            " excluded",
+        );
       } catch {
         this.event(
           "Playlist sync failed; previous snapshot preserved. Check API key, access and quota.",
@@ -258,7 +295,7 @@ export class Engine extends EventEmitter {
       this.dependencies.source ??
       (s.mediaSource === "local"
         ? new LocalMediaSource(this.config.MEDIA_DIR)
-        : new ExperimentalYouTubeSource(this.config))
+        : new ExperimentalYouTubeSource(this.config, undefined, s))
     );
   }
   private async play(s: Settings, signal: AbortSignal) {
@@ -278,7 +315,8 @@ export class Engine extends EventEmitter {
         let item: StoredItem | undefined;
         for (let k = 0; k < items.length; k++) {
           const candidate = items[(index + k) % items.length];
-          if (candidate.available && candidate.retryAt <= Date.now()) {
+          if (candidate.available && candidate.retryAt <= Date.now() &&
+              !(s.shuffle && this.store.get("lastVideoLong", false) && isLongVideo(candidate) && !(candidate.id === saved?.id && saved.offset > 0))) {
             item = candidate;
             index = (index + k) % items.length;
             break;
@@ -287,7 +325,7 @@ export class Engine extends EventEmitter {
         if (!item) {
           this.state = "waiting";
           this.current = null;
-          this.event();
+          this.event(s.shuffle && this.store.get("lastVideoLong", false) ? "Waiting for an available video of 1 hour 10 minutes or less to separate long videos" : undefined);
           const idle = standby(this.config, s, epoch, signal, () =>
             this.event("Standby encoder failed; retry scheduled", "error"),
           );
@@ -297,7 +335,7 @@ export class Engine extends EventEmitter {
             } while (
               !this.store
                 .all()
-                .some((i) => i.available && i.retryAt <= Date.now())
+                .some((i) => i.available && i.retryAt <= Date.now() && !(s.shuffle && this.store.get("lastVideoLong", false) && isLongVideo(i)))
             );
           } finally {
             await idle.stop();
@@ -317,6 +355,11 @@ export class Engine extends EventEmitter {
         );
         try {
           source.pin?.(item.videoId);
+          this.event(
+            "Preparing media: " +
+              item.title +
+              ". The complete video is downloaded before playback.",
+          );
           const file = await source.resolve(item, clipSignal);
           const info = JSON.parse(
             await runCapture(
@@ -325,7 +368,7 @@ export class Engine extends EventEmitter {
                 "-v",
                 "error",
                 "-show_entries",
-                "stream=codec_type:format=duration",
+                "stream=codec_type,codec_name,sample_rate,channels:format=duration",
                 "-of",
                 "json",
                 file,
@@ -342,7 +385,12 @@ export class Engine extends EventEmitter {
           const hasAudio = info.streams.some(
             (x: any) => x.codec_type === "audio",
           );
-          const ov = await overlay(this.config, s);
+          const audio = info.streams.find((x: any) => x.codec_type === "audio");
+          this.event(audio ? `Audio input: ${audio.codec_name}, ${audio.sample_rate} Hz, ${audio.channels} channels; output AAC 48000 Hz stereo` : "Video has no audio; using silence");
+          const ov = await overlay(this.config, {
+            ...s,
+            overlay: { ...s.overlay, title: item.title },
+          }, undefined, this.store.get<Record<string,string>>("uploadDates", {})[item.videoId]);
           clipSignal.throwIfAborted();
           await idle.stop();
           clipSignal.throwIfAborted();
@@ -381,9 +429,11 @@ export class Engine extends EventEmitter {
           const child = launch(this.config.FFMPEG_PATH, args, clipSignal);
           this.currentMedia = { file, duration };
           this.state = "playing";
+          this.store.set("lastVideoLong", isLongVideo(item));
           this.store.set("cursor", { id: item.id, offset });
           this.event();
-          const nextItem = items[(index + 1) % items.length];
+          const nextItem = Array.from({length: items.length - 1}, (_, k) => items[(index + 1 + k) % items.length])
+            .find((i) => i.available && i.retryAt <= Date.now() && !(s.shuffle && isLongVideo(item!) && isLongVideo(i)));
           if (
             nextItem &&
             nextItem.id !== item.id &&
@@ -430,19 +480,24 @@ export class Engine extends EventEmitter {
           }
           signal.throwIfAborted();
           if (code !== 0 || clipSignal.aborted)
-            throw new Error("Encoder did not finish normally");
+            throw new Error(mediaFailure(child));
           this.store.success(item.id);
           this.event("Finished: " + item.title);
-        } catch {
+        } catch (error) {
           if (signal.aborted) break;
           if (this.skipRequested) this.event("Skipped: " + item.title);
           else {
             this.store.fail(
               item.id,
-              "Media unavailable or encoder failed; retry in 5 minutes",
+              error instanceof Error
+                ? error.message
+                : "Media failed; retry in 5 minutes",
             );
             this.event(
-              "Item unavailable or encoder failed: " + item.title,
+              "Media failed: " +
+                item.title +
+                " — " +
+                (error instanceof Error ? error.message : "Unknown failure"),
               "warn",
             );
           }

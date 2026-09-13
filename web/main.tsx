@@ -23,6 +23,8 @@ import {
 import type { Settings } from "../server/config";
 import type { StoredItem } from "../server/db";
 import { OverlayEditor } from "./OverlayEditor";
+import { Credentials } from "./Credentials";
+import { YouTubeViewer } from "./YouTubeViewer";
 import "./style.css";
 type Snapshot = {
   state: string;
@@ -33,6 +35,7 @@ type Snapshot = {
   count: number;
   lastSync: number;
   desired: boolean;
+  excluded: number;
 };
 async function api(url: string, method = "GET", body?: unknown) {
   const r = await fetch("/api/" + url, {
@@ -393,6 +396,7 @@ function App() {
                 }
               />
             </div>
+            {settings && <YouTubeViewer videoId={settings.youtubeWatchId} onSaved={id=>setSettings(s=>s?{...s,youtubeWatchId:id}:s)} />}
             <div className="overview-grid">
               <section className="panel playout">
                 <div className="panel-heading">
@@ -432,7 +436,7 @@ function App() {
                       <span>
                         <Radio size={22} />
                       </span>
-                      <b>{settings.overlay.title}</b>
+                      <b>{state?.current?.title ?? settings.overlay.title}</b>
                     </div>
                   )}
                 </div>
@@ -502,7 +506,9 @@ function App() {
                       <b>{name === "youtube" ? "YouTube Live" : "Twitch"}</b>
                       <small>
                         {settings?.[name].enabled
-                          ? (state?.outputs[name]?.status ?? "Stopped")
+                          ? state?.state === "stopped"
+                            ? "Ready · stopped"
+                            : (state?.outputs[name]?.status ?? "Connecting")
                           : "Not enabled"}
                       </small>
                     </div>
@@ -638,15 +644,79 @@ function App() {
           >
             <section className="panel form-panel">
               <span className="eyebrow">01 / SOURCE</span>
-              <h2>Your playlist, on repeat.</h2>
+              <h2>Your videos, on repeat.</h2>
+              <label>Combined sources (one YouTube playlist or channel link per line)
+                <textarea rows={5} value={settings.sources.map((source) => source.value).join("\n")}
+                  onChange={(e) => change({sources: e.target.value.split("\n").map((value) => ({value, kind: (value.includes("list=") || /^[A-Za-z0-9_-]+$/.test(value) && !value.startsWith("UC") ? "playlist" : "channel") as "playlist" | "channel"}))})}
+                  onBlur={() => change({sources: settings.sources.filter((source) => source.value.trim())})}
+                  placeholder={"https://www.youtube.com/playlist?list=…\nhttps://www.youtube.com/@channel"} />
+              </label>
+              <p className="hint">When filled in, these sources replace the single source below. Duplicate videos are included once.</p>
               <label>
-                YouTube playlist link or ID
-                <input
-                  value={settings.playlistId}
-                  onChange={(e) => change({ playlistId: e.target.value })}
-                  placeholder="https://www.youtube.com/playlist?list=…"
+                Queue source
+                <select
+                  value={settings.sourceMode}
+                  onChange={(e) =>
+                    change({
+                      sourceMode: e.target.value as Settings["sourceMode"],
+                    })
+                  }
+                >
+                  <option value="playlist">YouTube playlist</option>
+                  <option value="channel">Entire YouTube channel</option>
+                </select>
+              </label>
+              {settings.sourceMode === "channel" ? (
+                <label>
+                  YouTube channel URL or @handle
+                  <input
+                    value={settings.channelUrl}
+                    onChange={(e) => change({ channelUrl: e.target.value })}
+                    placeholder="https://www.youtube.com/@channel"
+                  />
+                </label>
+              ) : (
+                <label>
+                  YouTube playlist link or ID
+                  <input
+                    value={settings.playlistId}
+                    onChange={(e) => change({ playlistId: e.target.value })}
+                    placeholder="https://www.youtube.com/playlist?list=…"
+                  />
+                </label>
+              )}
+              <label>
+                Exclude title words or phrases (one per line)
+                <textarea
+                  rows={4}
+                  value={settings.excludedWords.join("\n")}
+                  onChange={(e) =>
+                    change({ excludedWords: e.target.value.split("\n") })
+                  }
+                  onBlur={() =>
+                    change({
+                      excludedWords: settings.excludedWords
+                        .map((w) => w.trim())
+                        .filter(Boolean),
+                    })
+                  }
+                  placeholder={"Trailer\nAnnouncement"}
                 />
               </label>
+              <label className="toggle">
+                <input
+                  type="checkbox"
+                  checked={settings.shuffle}
+                  onChange={(e) => change({ shuffle: e.target.checked })}
+                />
+                Shuffle
+              </label>
+              <p className="hint">
+                Exclusions ignore capitalization. Shuffle creates a new order on
+                each sync. Videos over 1 hour 10 minutes cannot play consecutively; playback waits if no shorter video is available. Save and sync
+                to apply queue changes. Last sync excluded{" "}
+                {state?.excluded ?? 0} videos.
+              </p>
               <label>
                 Media source
                 <select
@@ -722,9 +792,8 @@ function App() {
                 </div>
               ))}
               <p className="hint">
-                Keys stay in your server’s environment. Restart IdleCast after
-                changing credentials. Create your broadcast in the destination’s
-                creator dashboard first.
+                Save API and stream keys in the Credentials section. Create your
+                broadcast in the destination’s creator dashboard first.
               </p>
             </section>
             <section className="panel form-panel">
@@ -753,7 +822,7 @@ function App() {
                 Show bottom-left overlay
               </label>
               <label>
-                Channel title
+                Standby / preview title
                 <input
                   value={settings.overlay.title}
                   maxLength={100}
@@ -777,8 +846,9 @@ function App() {
                 />
               </label>
               <p className="hint">
-                Place the image in media/avatars. Background: 65% opacity.
-                Avatar and title: fully opaque.
+                During playback, the current video title appears in white with a
+                black outline and no background box. Avatars use a proportional
+                square crop. Place images in media/avatars.
               </p>
               <div className="two-fields">
                 <label>
@@ -825,19 +895,40 @@ function App() {
               <span className="eyebrow">04 / QUALITY</span>
               <h2>Built for the long run.</h2>
               <div className="quality">
-                <b>1280 × 720</b>
+                <b>
+                  {settings.width} × {settings.height}
+                </b>
                 <span>H.264 video / AAC audio</span>
               </div>
               <label>
+                Resolution
+                <select
+                  aria-label="Resolution"
+                  value={settings.height}
+                  onChange={(e) =>
+                    change(
+                      e.target.value === "1080"
+                        ? { width: 1920, height: 1080 }
+                        : { width: 1280, height: 720 },
+                    )
+                  }
+                >
+                  <option value={720}>1280 × 720 (720p)</option>
+                  <option value={1080}>1920 × 1080 (1080p)</option>
+                </select>
+              </label>
+              <label>
                 Frame rate
                 <select
+                  aria-label="Frame rate"
                   value={settings.fps}
                   onChange={(e) =>
-                    change({ fps: Number(e.target.value) as 24 | 30 })
+                    change({ fps: Number(e.target.value) as 24 | 30 | 60 })
                   }
                 >
                   <option value={24}>24 fps</option>
                   <option value={30}>30 fps</option>
+                  <option value={60}>60 fps</option>
                 </select>
               </label>
               <label>
@@ -854,14 +945,22 @@ function App() {
                 />
               </label>
               <p className="hint">
-                2500 kbps is the lightweight default. Simultaneous destinations
-                multiply outbound bandwidth, but share the video encode.
+                Higher resolution and 60 fps use more CPU. Save quality settings
+                before opening the overlay preview. Lower-frame-rate sources
+                repeat frames at 60 fps. Simultaneous destinations multiply
+                outbound bandwidth, but share the video encode.
               </p>
               <p className="hint">
                 Stop playback before saving. After adding a playlist, save and
                 sync to build your queue.
               </p>
             </section>
+            <Credentials
+              onSaved={async () => {
+                const result = await api("settings");
+                setConfigured(result.configured);
+              }}
+            />
             <div className="save-bar">
               <span>{dirty ? "Unsaved changes" : "Settings are saved"}</span>
               <button
