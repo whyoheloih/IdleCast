@@ -5,6 +5,7 @@ import path from "node:path";
 import os from "node:os";
 import { defaults } from "../server/config.js";
 import { encodeArgs } from "../server/encoder.js";
+import { RtmpOutput } from "../server/providers.js";
 import { runCapture } from "../server/process.js";
 import { prepareQueue, isLongVideo } from "../server/queue.js";
 import { overlayLayout, formatUploadDate } from "../server/overlay.js";
@@ -16,7 +17,10 @@ test("44.1 and 48 kHz audio retain tone pitch and duration after encoding", asyn
     for (const rate of [44100,48000]) {
       const file = path.join(root, `${rate}.m4a`), pcm = path.join(root, `${rate}.pcm`);
       const args = encodeArgs(defaults,19000,0);
-      await runCapture("ffmpeg", ["-y","-f","lavfi","-i",`sine=frequency=1000:sample_rate=${rate}:duration=3`,"-vn",...args.slice(args.indexOf("-c:a"), -3),file],signal);
+      await runCapture("ffmpeg", ["-y","-f","lavfi","-i",`sine=frequency=1000:sample_rate=${rate}:duration=3,asetpts=PTS*1.02`,"-vn",...args.slice(args.indexOf("-c:a"), -3),file],signal);
+      const stream = JSON.parse(await runCapture("ffprobe", ["-v","error","-select_streams","a:0","-show_entries","stream=sample_rate,channels","-of","json",file],signal)).streams[0];
+      assert.equal(stream.sample_rate,"48000");
+      assert.equal(stream.channels,2);
       await runCapture("ffmpeg",["-y","-i",file,"-ac","1","-ar","48000","-f","f32le",pcm],signal);
       const data = await readFile(pcm);
       let crossings = 0, peakStep = 0;
@@ -30,6 +34,18 @@ test("44.1 and 48 kHz audio retain tone pitch and duration after encoding", asyn
       assert.ok(Math.abs(data.length/4/48000-3)<.06);
     }
   } finally {await rm(root,{recursive:true,force:true});}
+});
+
+test("audio clock does not stretch to timestamps and UDP handoff has a bounded receive buffer", () => {
+  const args = encodeArgs(defaults, 19000, 0);
+  const filter = args[args.indexOf("-af") + 1];
+  assert.match(filter, /aresample=48000:async=0/);
+  assert.match(filter, /out_chlayout=stereo/);
+  assert.match(filter, /asetpts=N\/SR\/TB/);
+  const output = new RtmpOutput("youtube", "test-key").args(defaults, 19000);
+  const input = output[output.indexOf("-i") + 1];
+  assert.match(input, /buffer_size=4194304/);
+  assert.match(input, /fifo_size=65536/);
 });
 
 test("shuffle separates long videos when possible and 70 minutes is short", () => {

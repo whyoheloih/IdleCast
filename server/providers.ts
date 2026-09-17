@@ -342,7 +342,7 @@ export class RtmpOutput implements StreamOutputProvider {
       "-fflags",
       "+genpts+discardcorrupt",
       "-i",
-      "udp://127.0.0.1:" + port + "?fifo_size=65536&overrun_nonfatal=1",
+      "udp://127.0.0.1:" + port + "?buffer_size=4194304&fifo_size=65536&overrun_nonfatal=1",
       "-map",
       "0:v:0",
       "-map",

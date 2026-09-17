@@ -45,7 +45,7 @@ export function encodeArgs(
     "-ac",
     "2",
     "-af",
-    "aresample=48000:async=0,asetpts=N/SR/TB",
+    "aresample=48000:async=0:first_pts=0:out_sample_fmt=fltp:out_chlayout=stereo,asetpts=N/SR/TB",
     "-output_ts_offset",
     String(offset),
     "-f",
