@@ -65,6 +65,7 @@ test("FFmpeg overlay has no background box and has outlined text with an opaque 
         total: 130,
       }),
       output = path.join(root, "frame.rgb");
+    assert.match(result.filter, /text=.*fontsize=18:x=w-tw-/);
     await runCapture(
       "ffmpeg",
       [

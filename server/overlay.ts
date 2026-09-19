@@ -100,7 +100,7 @@ export async function overlay(
     : "";
   const draw = `drawtext=${style}:textfile='${filterPath(textFile)}':fontsize=${layout.fontSize}:line_spacing=${Math.ceil(layout.fontSize * .25)}:x=${layout.textX}:y=${layout.textY}` +
     (layout.date ? `,drawtext=${style}:textfile='${filterPath(dateFile)}':fontsize=${layout.dateSize}:x=${layout.textX}:y=${layout.textY + layout.dateOffset}` : "") +
-    (timelineText ? `,drawtext=${style.replace("expansion=none", "expansion=normal")}:text='${timelineText}':fontsize=${layout.dateSize}:x=w-tw-${s.overlay.margin}:y=h-th-${s.overlay.margin}` : "");
+    (timelineText ? `,drawtext=${style.replace("expansion=none", "expansion=normal")}:text='${timelineText}':fontsize=${layout.dateSize + 2}:x=w-tw-${s.overlay.margin}:y=h-th-${s.overlay.margin}` : "");
   const box = `[base]null[box]`;
   if (!avatar)
     return { inputs: [], filter: base + ";" + box + ";[box]" + draw + "[v]" };
