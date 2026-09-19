@@ -12,6 +12,9 @@ import {
   isLongVideo,
   canStartShuffledQueue,
   shuffleOrderError,
+  needsLongDownloadLead,
+  canLeadLongDownload,
+  canFollowInShuffledQueue,
 } from "../server/queue.js";
 import { overlayLayout, formatUploadDate } from "../server/overlay.js";
 
@@ -59,16 +62,52 @@ test("audio preserves source timestamps and UDP handoff absorbs upload stalls", 
   assert.match(input, /fifo_size=262144/);
 });
 
-test("shuffle starts short and separates long videos when possible", () => {
-  const items=[4201,1200,28800,4200,8000,20].map((duration,n)=>({id:String(n),videoId:String(n),position:n,title:"Video",channel:"",thumbnail:"",available:true,duration}));
-  const queue=prepareQueue(items,{...defaults,shuffle:true},()=>0).items;
+test("shuffle starts with two short videos and gives 3-hour videos download lead time", () => {
+  const items = [4201, 30, 12000, 4200, 8000, 20, 14400, 1000].map(
+    (duration, index) => ({
+      id: String(index),
+      videoId: String(index),
+      position: index,
+      title: "Video",
+      channel: "",
+      thumbnail: "",
+      available: true,
+      duration,
+    }),
+  );
+  const queue = prepareQueue(
+    items,
+    { ...defaults, shuffle: true },
+    () => 0,
+  ).items;
   assert.ok(canStartShuffledQueue(queue[0]));
-  for(let n=0;n<queue.length;n++) assert.ok(!(isLongVideo(queue[n])&&isLongVideo(queue[(n+1)%queue.length])));
-  assert.equal(isLongVideo(items[3]),false);
+  assert.ok(canStartShuffledQueue(queue[1]));
+  for (let index = 1; index < queue.length; index++) {
+    if (needsLongDownloadLead(queue[index]))
+      assert.ok(
+        canLeadLongDownload(queue[index - 1]),
+        "a video over 3 hours needs a 2-hour predecessor",
+      );
+    assert.ok(
+      canFollowInShuffledQueue(queue[index - 1], queue[index]),
+      "shuffle emitted a forbidden long-video pair",
+    );
+  }
+  assert.equal(isLongVideo(items[3]), false);
   assert.equal(shuffleOrderError(queue), null);
-  assert.match(shuffleOrderError([items[0],items[5],items[2],items[1],items[4],items[3]])!, /first playable/);
-});
 
+  const badOpening = [...queue];
+  const ordinaryLong = badOpening.findIndex(
+    (item) => isLongVideo(item) && !needsLongDownloadLead(item),
+  );
+  badOpening.splice(0, 0, badOpening.splice(ordinaryLong, 1)[0]);
+  assert.match(shuffleOrderError(badOpening)!, /first two playable/);
+
+  const badLead = [...queue];
+  const veryLong = badLead.findIndex(needsLongDownloadLead);
+  badLead.splice(2, 0, badLead.splice(veryLong, 1)[0]);
+  assert.match(shuffleOrderError(badLead)!, /over 3 hours/);
+});
 test("full title and upload date fit beside avatar without truncation",()=>{
   const title="This is a very long video title with more words than the previous single line could display ".repeat(4);
   const layout=overlayLayout({...defaults,overlay:{...defaults.overlay,avatar:"avatar.png",title}},"2026-09-13T12:00:00Z");

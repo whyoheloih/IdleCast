@@ -71,6 +71,10 @@ try {
     .getByRole("heading", { name: "Your broadcast, at a glance." })
     .waitFor();
   await page.getByText("Test playlist video 1", { exact: true }).waitFor();
+  assert.equal(
+    await page.getByRole("button", { name: "Reload update" }).count(),
+    1,
+  );
   await page.screenshot({
     path: path.join(screenshots, "desktop.png"),
     fullPage: true,

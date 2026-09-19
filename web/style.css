@@ -224,6 +224,15 @@ header h1 {
 header p {
   font-size: 12px;
 }
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.reload-update {
+  padding: 8px 11px;
+  font-size: 11px;
+}
 .connection {
   font-size: 11px;
   display: flex;

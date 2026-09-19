@@ -324,10 +324,24 @@ function App() {
                       : "The essentials behind your broadcast."}
             </p>
           </div>
-          <span className={"connection " + (!connected ? "offline" : "")}>
-            <i className="dot" />
-            {connected ? "Connected" : "Reconnecting"}
-          </span>
+          <div className="header-actions">
+            <button
+              type="button"
+              className="reload-update"
+              title="Reload the latest IdleCast update"
+              onClick={() => {
+                const url = new URL(window.location.href);
+                url.searchParams.set("updated", String(Date.now()));
+                window.location.replace(url);
+              }}
+            >
+              <RefreshCw size={15} /> Reload update
+            </button>
+            <span className={"connection " + (!connected ? "offline" : "")}>
+              <i className="dot" />
+              {connected ? "Connected" : "Reconnecting"}
+            </span>
+          </div>
         </header>
         {error && (
           <div className="alert" role="alert">
@@ -766,10 +780,11 @@ function App() {
               </label>
               <p className="hint">
                 Exclusions ignore capitalization. Shuffle creates a new order on
-                each sync, starts with a video of 15 minutes or less, and keeps
-                videos over 1 hour 10 minutes from playing consecutively. Use the
-                arrows on the Playlist page to adjust the shuffled order. Playback
-                waits when no qualifying shorter video is available. Save and sync
+                each sync, starts with two videos of 15 minutes or less, and keeps
+                videos over 1 hour 10 minutes from playing consecutively. Videos
+                over 3 hours follow a video of at least 2 hours so they can download
+                during it. Use the Playlist arrows to adjust the shuffled order.
+                Playback waits when no qualifying video is available. Save and sync
                 to apply queue changes. Last sync excluded{" "}
                 {state?.excluded ?? 0} videos.
               </p>
