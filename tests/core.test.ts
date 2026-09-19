@@ -155,6 +155,9 @@ test("SQLite migration, atomic replacement, failure preservation, cursor and res
   let db = new Store(file);
   try {
     db.replace([item("one"), item("two", 1)]);
+    assert.equal(db.move("two", 0), true);
+    assert.deepEqual(db.all().map((row) => row.id), ["two", "one"]);
+    assert.equal(db.move("missing", 0), false);
     db.fail("one", "Unavailable");
     db.set("cursor", { id: "two", offset: 7 });
     db.set("desired", true);

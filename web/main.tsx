@@ -19,6 +19,8 @@ import {
   ChevronRight,
   Link,
   Volume2,
+  ChevronUp,
+  ChevronDown,
 } from "lucide-react";
 import type { Settings } from "../server/config";
 import type { StoredItem } from "../server/db";
@@ -60,6 +62,12 @@ async function api(url: string, method = "GET", body?: unknown) {
 }
 const time = (n: number) =>
   new Date(Math.max(0, n) * 1000).toISOString().slice(11, 19);
+const hasQueueSource = (settings: Settings | null) =>
+  !!settings &&
+  (settings.sources.some((source) => source.value.trim()) ||
+    (settings.sourceMode === "channel"
+      ? !!settings.channelUrl.trim()
+      : !!settings.playlistId.trim()));
 const nav = [
   ["Overview", LayoutDashboard],
   ["Playlist", ListVideo],
@@ -186,6 +194,13 @@ function App() {
   function change(patch: Partial<Settings>) {
     setSettings((s) => (s ? { ...s, ...patch } : s));
     setDirty(true);
+  }
+  async function moveQueueItem(id: string, to: number) {
+    await action("reorder", async () => {
+      await api("playlist/order", "PUT", { id, to });
+      await loadItems();
+      setNotice("Queue order saved. Syncing again will create a new source order.");
+    });
   }
   if (auth === null)
     return (
@@ -328,7 +343,7 @@ function App() {
             {notice}
           </div>
         )}
-        {(!configured.youtubeApi || !settings?.playlistId) && (
+        {(!configured.youtubeApi || !hasQueueSource(settings)) && (
           <div className="setup-banner">
             <Link />
             <div>
@@ -585,10 +600,12 @@ function App() {
                   Broadcast queue{" "}
                   <span className="count">{state?.count ?? 0}</span>
                 </h2>
-                <p>Original playlist order · loops continuously</p>
+                <p>Use the arrow buttons to set the order · loops continuously</p>
               </div>
               <button
-                disabled={!!busy || state?.syncing || dirty}
+                disabled={
+                  !!busy || state?.syncing || dirty || !hasQueueSource(settings)
+                }
                 onClick={() =>
                   void action("sync", async () => {
                     await api("sync", "POST");
@@ -597,7 +614,11 @@ function App() {
                 }
               >
                 <RefreshCw size={16} className={state?.syncing ? "spin" : ""} />
-                {state?.syncing ? "Syncing…" : "Sync now"}
+                {state?.syncing
+                  ? "Syncing…"
+                  : settings?.shuffle
+                    ? "Reshuffle"
+                    : "Sync now"}
               </button>
             </div>
             {!items.length ? (
@@ -626,6 +647,14 @@ function App() {
                         item={items[v.index]}
                         index={v.index}
                         active={items[v.index].id === state?.current?.id}
+                        canMoveUp={v.index > 0}
+                        canMoveDown={v.index < items.length - 1}
+                        moveDisabled={
+                          !!busy || state?.state !== "stopped" || state?.syncing
+                        }
+                        onMove={(to) =>
+                          void moveQueueItem(items[v.index].id, to)
+                        }
                       />
                     </div>
                   ))}
@@ -713,7 +742,10 @@ function App() {
               </label>
               <p className="hint">
                 Exclusions ignore capitalization. Shuffle creates a new order on
-                each sync. Videos over 1 hour 10 minutes cannot play consecutively; playback waits if no shorter video is available. Save and sync
+                each sync, starts with a video of 15 minutes or less, and keeps
+                videos over 1 hour 10 minutes from playing consecutively. Use the
+                arrows on the Playlist page to adjust the shuffled order. Playback
+                waits when no qualifying shorter video is available. Save and sync
                 to apply queue changes. Last sync excluded{" "}
                 {state?.excluded ?? 0} videos.
               </p>
@@ -972,7 +1004,7 @@ function App() {
               </button>
               <button
                 type="button"
-                disabled={!!busy || dirty || !settings.playlistId}
+                disabled={!!busy || dirty || !hasQueueSource(settings)}
                 onClick={() =>
                   void action("sync", async () => {
                     await api("sync", "POST");
@@ -1128,16 +1160,44 @@ function Row({
   item,
   index,
   active = false,
+  canMoveUp = false,
+  canMoveDown = false,
+  moveDisabled = false,
+  onMove,
 }: {
   item: StoredItem;
   index: number;
   active?: boolean;
+  canMoveUp?: boolean;
+  canMoveDown?: boolean;
+  moveDisabled?: boolean;
+  onMove?: (to: number) => void;
 }) {
   return (
     <div className={"playlist-row " + (active ? "playing-row" : "")}>
       <span className="row-index">
         {active ? <Volume2 size={17} /> : String(index + 1).padStart(2, "0")}
       </span>
+      {onMove && (
+        <div className="row-actions">
+          <button
+            type="button"
+            aria-label={`Move ${item.title} up`}
+            disabled={moveDisabled || !canMoveUp}
+            onClick={() => onMove(index - 1)}
+          >
+            <ChevronUp size={15} />
+          </button>
+          <button
+            type="button"
+            aria-label={`Move ${item.title} down`}
+            disabled={moveDisabled || !canMoveDown}
+            onClick={() => onMove(index + 1)}
+          >
+            <ChevronDown size={15} />
+          </button>
+        </div>
+      )}
       <div className="thumb">
         {item.thumbnail?.startsWith("https://i.ytimg.com/") ? (
           <img src={item.thumbnail} alt="" loading="lazy" />

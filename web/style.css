@@ -561,6 +561,17 @@ header p {
   color: #929ca8;
   font-variant-numeric: tabular-nums;
 }
+.row-actions {
+  display: flex;
+  gap: 4px;
+}
+.row-actions button {
+  min-width: 30px;
+  min-height: 30px;
+  padding: 5px;
+  display: grid;
+  place-items: center;
+}
 .playing-row {
   background: #263124;
 }

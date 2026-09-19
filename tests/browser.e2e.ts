@@ -77,6 +77,16 @@ try {
   });
   await page.getByRole("button", { name: "Playlist", exact: true }).click();
   await page.getByText("Test playlist video 1", { exact: true }).waitFor();
+  await page
+    .getByRole("button", { name: "Move Test playlist video 1 down" })
+    .click();
+  await page
+    .getByText("Queue order saved. Syncing again will create a new source order.")
+    .waitFor();
+  assert.deepEqual(
+    db.all().slice(0, 2).map((item) => item.title),
+    ["Test playlist video 2", "Test playlist video 1"],
+  );
   assert.ok(
     (await page.locator(".playlist-row").count()) < 40,
     "playlist should virtualize 1000 rows",
@@ -206,6 +216,13 @@ try {
   assert.deepEqual(db.settings().excludedWords, ["Trailer", "Announcement"]);
   assert.equal(db.settings().height, 1080);
   assert.equal(db.settings().fps, 60);
+  assert.equal(
+    await page
+      .getByRole("button", { name: "Sync playlist", exact: true })
+      .isDisabled(),
+    false,
+    "channel and combined sources must enable synchronization",
+  );
   await page
     .getByLabel("YouTube API key", { exact: true })
     .fill("browser-secret-test");

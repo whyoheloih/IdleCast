@@ -91,6 +91,28 @@ export class Store {
       throw e;
     }
   }
+  move(id: string, to: number): boolean {
+    const ids = (
+      this.db.prepare("SELECT id FROM items ORDER BY position,id").all() as {
+        id: string;
+      }[]
+    ).map((row) => row.id);
+    const from = ids.indexOf(id);
+    if (from < 0) return false;
+    const target = Math.max(0, Math.min(to, ids.length - 1));
+    if (from === target) return true;
+    ids.splice(target, 0, ids.splice(from, 1)[0]);
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const update = this.db.prepare("UPDATE items SET position=? WHERE id=?");
+      ids.forEach((itemId, position) => update.run(position, itemId));
+      this.db.exec("COMMIT");
+      return true;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
   fail(id: string, message: string) {
     this.db
       .prepare(

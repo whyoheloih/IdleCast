@@ -79,6 +79,34 @@ test("admin authentication, write-origin checks, secret exclusion, validation, a
       (await fetch(base + "/api/playlist?limit=999999", { headers })).status,
       400,
     );
+    store.set("settings", { ...store.settings(), shuffle: true });
+    store.replace([
+      { id: "one", videoId: "abcdefghijk", position: 0, title: "One", channel: "", thumbnail: "", available: true, duration: 1 },
+      { id: "two", videoId: "lmnopqrstuv", position: 1, title: "Two", channel: "", thumbnail: "", available: true, duration: 1 },
+      { id: "long", videoId: "zzzzzzzzzzz", position: 2, title: "Long", channel: "", thumbnail: "", available: true, duration: 5000 },
+    ]);
+    assert.equal(
+      (
+        await fetch(base + "/api/playlist/order", {
+          method: "PUT",
+          headers,
+          body: JSON.stringify({ id: "two", to: 0 }),
+        })
+      ).status,
+      200,
+    );
+    assert.deepEqual(store.all().map((row) => row.id), ["two", "one", "long"]);
+    assert.equal(
+      (
+        await fetch(base + "/api/playlist/order", {
+          method: "PUT",
+          headers,
+          body: JSON.stringify({ id: "long", to: 0 }),
+        })
+      ).status,
+      400,
+    );
+    assert.deepEqual(store.all().map((row) => row.id), ["two", "one", "long"]);
     assert.equal(
       (await fetch(base + "/api/start", { method: "POST", headers })).status,
       400,

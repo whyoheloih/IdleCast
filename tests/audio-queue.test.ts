@@ -7,7 +7,12 @@ import { defaults } from "../server/config.js";
 import { encodeArgs } from "../server/encoder.js";
 import { RtmpOutput } from "../server/providers.js";
 import { runCapture } from "../server/process.js";
-import { prepareQueue, isLongVideo } from "../server/queue.js";
+import {
+  prepareQueue,
+  isLongVideo,
+  canStartShuffledQueue,
+  shuffleOrderError,
+} from "../server/queue.js";
 import { overlayLayout, formatUploadDate } from "../server/overlay.js";
 
 test("44.1 and 48 kHz audio retain tone pitch and duration after encoding", async () => {
@@ -48,11 +53,14 @@ test("audio clock does not stretch to timestamps and UDP handoff has a bounded r
   assert.match(input, /fifo_size=65536/);
 });
 
-test("shuffle separates long videos when possible and 70 minutes is short", () => {
-  const items=[4201,100,28800,4200,8000,20].map((duration,n)=>({id:String(n),videoId:String(n),position:n,title:"Video",channel:"",thumbnail:"",available:true,duration}));
+test("shuffle starts short and separates long videos when possible", () => {
+  const items=[4201,1200,28800,4200,8000,20].map((duration,n)=>({id:String(n),videoId:String(n),position:n,title:"Video",channel:"",thumbnail:"",available:true,duration}));
   const queue=prepareQueue(items,{...defaults,shuffle:true},()=>0).items;
+  assert.ok(canStartShuffledQueue(queue[0]));
   for(let n=0;n<queue.length;n++) assert.ok(!(isLongVideo(queue[n])&&isLongVideo(queue[(n+1)%queue.length])));
   assert.equal(isLongVideo(items[3]),false);
+  assert.equal(shuffleOrderError(queue), null);
+  assert.match(shuffleOrderError([items[0],items[5],items[2],items[1],items[4],items[3]])!, /first playable/);
 });
 
 test("full title and upload date fit beside avatar without truncation",()=>{

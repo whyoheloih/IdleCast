@@ -17,16 +17,21 @@ test("experimental adapter is opt-in, uses YouTube media URLs, deduplicates down
     EXPERIMENTAL_YOUTUBE: "true",
   });
   let calls = 0;
+  let active = 0,
+    maxActive = 0;
   const source = new ExperimentalYouTubeSource(
     c,
     async (_binary, args, signal) => {
       calls++;
+      active++;
+      maxActive = Math.max(maxActive, active);
       signal.throwIfAborted();
       assert.ok(args.includes("--ignore-config"));
       assert.ok(args.includes("--js-runtimes"));
       assert.ok(args.at(-1)?.startsWith("https://www.youtube.com/watch?v="));
       const template = args[args.indexOf("-o") + 1];
       await writeFile(template.replace("%(ext)s", "mp4"), "test media bytes");
+      active--;
       return "";
     },
   );
@@ -71,6 +76,7 @@ test("experimental adapter is opt-in, uses YouTube media URLs, deduplicates down
     assert.ok(names.includes(b.videoId + ".720p30.mp4"));
     assert.ok(names.includes(d.videoId + ".720p30.mp4"));
     assert.ok(!names.includes(a.videoId + ".720p30.mp4"));
+    assert.equal(maxActive, 1, "different video downloads must remain serialized");
     const abort = new AbortController();
     const pending = withCancellation(new Promise(() => {}), abort.signal);
     abort.abort();

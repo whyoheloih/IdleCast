@@ -10,6 +10,7 @@ import { promisify } from "node:util";
 import path from "node:path";
 import { statfs } from "node:fs/promises";
 import { z } from "zod";
+import { shuffleOrderError } from "./queue.js";
 import type { Config } from "./config.js";
 import { settingsSchema } from "./config.js";
 import { Store } from "./db.js";
@@ -312,6 +313,41 @@ export function createApp(c: Config, store: Store, engine: Engine) {
       items: store.list(query.data.offset, query.data.limit),
       total: store.count(),
     });
+  });
+  app.put("/api/playlist/order", (req, res) => {
+    if (engine.state !== "stopped" || engine.syncing) {
+      res.status(409).json({ error: "Stop playback and wait for sync before reordering" });
+      return;
+    }
+    const parsed = z
+      .object({
+        id: z.string().min(1).max(500),
+        to: z.number().int().min(0).max(100000),
+      })
+      .strict()
+      .safeParse(req.body);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid queue move" });
+      return;
+    }
+    const preview = store.all();
+    const from = preview.findIndex((item) => item.id === parsed.data.id);
+    if (from < 0) {
+      res.status(404).json({ error: "Queue item not found" });
+      return;
+    }
+    const target = Math.max(0, Math.min(parsed.data.to, preview.length - 1));
+    preview.splice(target, 0, preview.splice(from, 1)[0]);
+    const orderError = store.settings().shuffle
+      ? shuffleOrderError(preview)
+      : null;
+    if (orderError) {
+      res.status(400).json({ error: orderError });
+      return;
+    }
+    store.move(parsed.data.id, target);
+    engine.event("Queue order updated");
+    res.json({ ok: true });
   });
   app.post("/api/sync", async (_req, res) => {
     await engine.sync();

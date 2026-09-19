@@ -18,7 +18,11 @@ import {
   backoff,
   mediaFailure,
 } from "./process.js";
-import { prepareQueue, isLongVideo } from "./queue.js";
+import {
+  prepareQueue,
+  isLongVideo,
+  canStartShuffledQueue,
+} from "./queue.js";
 import { playlistId as parsePlaylistId } from "./config.js";
 import { overlay } from "./overlay.js";
 import { encodeArgs, standby } from "./encoder.js";
@@ -128,6 +132,10 @@ export class Engine extends EventEmitter {
         const fetched = [...unique.values()];
         const queue = prepareQueue(fetched, settings);
         this.store.replace(queue.items);
+        if (settings.shuffle) {
+          this.store.set("cursor", null);
+          this.store.set("shuffleNeedsShortStart", true);
+        }
         this.store.set("uploadDates", Object.fromEntries(fetched.map((item) => [item.videoId, item.publishedAt ?? ""])));
         this.store.set("excludedCount", queue.excluded);
         this.event(
@@ -313,10 +321,14 @@ export class Engine extends EventEmitter {
           items.findIndex((i) => i.id === saved?.id),
         );
         let item: StoredItem | undefined;
+        const needsShortStart =
+          s.shuffle && this.store.get("shuffleNeedsShortStart", true);
         for (let k = 0; k < items.length; k++) {
           const candidate = items[(index + k) % items.length];
+          const resuming = candidate.id === saved?.id && saved.offset > 0;
           if (candidate.available && candidate.retryAt <= Date.now() &&
-              !(s.shuffle && this.store.get("lastVideoLong", false) && isLongVideo(candidate) && !(candidate.id === saved?.id && saved.offset > 0))) {
+              !(needsShortStart && !resuming && !canStartShuffledQueue(candidate)) &&
+              !(s.shuffle && this.store.get("lastVideoLong", false) && isLongVideo(candidate) && !resuming)) {
             item = candidate;
             index = (index + k) % items.length;
             break;
@@ -325,7 +337,11 @@ export class Engine extends EventEmitter {
         if (!item) {
           this.state = "waiting";
           this.current = null;
-          this.event(s.shuffle && this.store.get("lastVideoLong", false) ? "Waiting for an available video of 1 hour 10 minutes or less to separate long videos" : undefined);
+          this.event(needsShortStart
+            ? "Waiting for an available shuffled video of 15 minutes or less"
+            : s.shuffle && this.store.get("lastVideoLong", false)
+              ? "Waiting for an available video of 1 hour 10 minutes or less to separate long videos"
+              : undefined);
           const idle = standby(this.config, s, epoch, signal, () =>
             this.event("Standby encoder failed; retry scheduled", "error"),
           );
@@ -335,7 +351,9 @@ export class Engine extends EventEmitter {
             } while (
               !this.store
                 .all()
-                .some((i) => i.available && i.retryAt <= Date.now() && !(s.shuffle && this.store.get("lastVideoLong", false) && isLongVideo(i)))
+                .some((i) => i.available && i.retryAt <= Date.now() &&
+                  (!needsShortStart || canStartShuffledQueue(i)) &&
+                  !(s.shuffle && this.store.get("lastVideoLong", false) && isLongVideo(i)))
             );
           } finally {
             await idle.stop();
@@ -429,6 +447,7 @@ export class Engine extends EventEmitter {
           const child = launch(this.config.FFMPEG_PATH, args, clipSignal);
           this.currentMedia = { file, duration };
           this.state = "playing";
+          this.store.set("shuffleNeedsShortStart", false);
           this.store.set("lastVideoLong", isLongVideo(item));
           this.store.set("cursor", { id: item.id, offset });
           this.event();
