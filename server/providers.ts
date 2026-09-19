@@ -17,6 +17,15 @@ export type PlaylistItem = {
 export interface PlaylistProvider {
   fetch(playlistId: string, signal: AbortSignal): Promise<PlaylistItem[]>;
 }
+export type DownloadActivity = {
+  videoId: string;
+  title: string;
+  percent: number | null;
+};
+export type MediaSourceHooks = {
+  onDownload?: (activity: DownloadActivity | null) => void;
+  onDelete?: (filename: string) => void;
+};
 export interface MediaSourceProvider {
   resolve(item: PlaylistItem, signal: AbortSignal): Promise<string>;
   pin?(id: string): void;
@@ -203,6 +212,7 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
       height: 720,
       fps: 30,
     },
+    private hooks: MediaSourceHooks = {},
   ) {}
   pin(id: string) {
     this.pinned = this.cacheName(id);
@@ -228,6 +238,10 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
   private cacheName(id: string) {
     return `${id}.${this.quality.height}p${this.quality.fps}`;
   }
+  private async removeCached(root: string, name: string) {
+    await rm(path.join(root, name), { force: true });
+    this.hooks.onDelete?.(name);
+  }
   private async download(item: PlaylistItem, signal: AbortSignal) {
     if (!this.c.EXPERIMENTAL_YOUTUBE)
       throw new Error("Experimental YouTube source is disabled");
@@ -239,7 +253,7 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
     // Prune on cache hits too; keep only the playing and requested videos.
     for (const name of await readdir(root))
       if (!name.startsWith(this.pinned + ".") && !name.startsWith(this.cacheName(item.videoId) + "."))
-        await rm(path.join(root, name), { force: true });
+        await this.removeCached(root, name);
     for (const ext of ["mp4", "mkv", "webm"])
       try {
         return await containedFile(
@@ -253,14 +267,23 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
         !name.startsWith(this.pinned + ".") &&
         !name.startsWith(this.cacheName(item.videoId) + ".")
       )
-        await rm(path.join(root, name), { force: true });
+        await this.removeCached(root, name);
+    this.hooks.onDownload?.({
+      videoId: item.videoId,
+      title: item.title,
+      percent: 0,
+    });
     try {
       await this.run(
         this.c.YTDLP_PATH,
         [
           "--ignore-config",
           "--no-playlist",
-          "--no-progress",
+          "--newline",
+          "--progress",
+          "--no-color",
+          "--progress-template",
+          "download:%(progress._percent_str)s",
           "--no-cache-dir",
           "--js-runtimes",
           "node:" + process.execPath,
@@ -298,11 +321,28 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
           }
           if (size > limit) throw new Error("Media cache limit exceeded");
         },
+        (chunk) => {
+          for (const match of chunk.matchAll(/download:\s*([0-9.]+)%/g)) {
+            const percent = Number(match[1]);
+            if (Number.isFinite(percent))
+              this.hooks.onDownload?.({
+                videoId: item.videoId,
+                title: item.title,
+                percent: Math.max(0, Math.min(100, percent)),
+              });
+          }
+        },
       );
+      this.hooks.onDownload?.({
+        videoId: item.videoId,
+        title: item.title,
+        percent: 100,
+      });
     } catch (e) {
+      this.hooks.onDownload?.(null);
       for (const name of await readdir(root))
         if (name.startsWith(this.cacheName(item.videoId) + "."))
-          await rm(path.join(root, name), { force: true });
+          await this.removeCached(root, name);
       throw e;
     }
     for (const ext of ["mp4", "mkv", "webm"]) {
@@ -317,6 +357,7 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
       }
       if ((await stat(file)).size > limit / 2) {
         await rm(file);
+        this.hooks.onDelete?.(path.basename(file));
         throw new Error("Media exceeds per-item cache limit");
       }
       return file;

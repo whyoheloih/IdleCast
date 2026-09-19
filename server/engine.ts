@@ -9,6 +9,7 @@ import {
   type PlaylistProvider,
   type MediaSourceProvider,
   type StreamOutputProvider,
+  type DownloadActivity,
 } from "./providers.js";
 import {
   launch,
@@ -53,6 +54,7 @@ export class Engine extends EventEmitter {
   private skipRequested = false;
   private closed = false;
   private currentMedia: { file: string; duration: number } | null = null;
+  private download: DownloadActivity | null = null;
   previewSource() {
     if (this.state !== "playing" || !this.currentMedia || !this.clip)
       return null;
@@ -65,6 +67,7 @@ export class Engine extends EventEmitter {
       signal: this.clip.signal,
       title: this.current?.title,
       publishedAt: this.current ? this.store.get<Record<string,string>>("uploadDates", {})[this.current.videoId] : "",
+      duration: this.currentMedia.duration,
     };
   }
   playlist: PlaylistProvider;
@@ -101,6 +104,7 @@ export class Engine extends EventEmitter {
       lastSync: this.store.get("lastSync", 0),
       desired: this.store.get("desired", false),
       excluded: this.store.get("excludedCount", 0),
+      download: this.download,
     };
   }
   sync(): Promise<void> {
@@ -303,7 +307,14 @@ export class Engine extends EventEmitter {
       this.dependencies.source ??
       (s.mediaSource === "local"
         ? new LocalMediaSource(this.config.MEDIA_DIR)
-        : new ExperimentalYouTubeSource(this.config, undefined, s))
+        : new ExperimentalYouTubeSource(this.config, undefined, s, {
+            onDownload: (download) => {
+              this.download = download;
+              this.event();
+            },
+            onDelete: (filename) =>
+              this.event("Cache deleted: " + filename),
+          }))
     );
   }
   private async play(s: Settings, signal: AbortSignal) {
@@ -408,7 +419,10 @@ export class Engine extends EventEmitter {
           const ov = await overlay(this.config, {
             ...s,
             overlay: { ...s.overlay, title: item.title },
-          }, undefined, this.store.get<Record<string,string>>("uploadDates", {})[item.videoId]);
+          }, undefined, this.store.get<Record<string,string>>("uploadDates", {})[item.videoId], {
+            offset,
+            total: duration,
+          });
           clipSignal.throwIfAborted();
           await idle.stop();
           clipSignal.throwIfAborted();
@@ -534,6 +548,8 @@ export class Engine extends EventEmitter {
       }
     } finally {
       await source.close?.();
+      this.download = null;
+      this.event();
     }
   }
   async close() {

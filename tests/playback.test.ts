@@ -14,7 +14,7 @@ import { readConfig, defaults } from "../server/config.js";
 import { Store } from "../server/db.js";
 import { Engine } from "../server/engine.js";
 import { runCapture, delay } from "../server/process.js";
-import { overlay } from "../server/overlay.js";
+import { overlay, formatTimeline } from "../server/overlay.js";
 import {
   LocalMediaSource,
   type PlaylistItem,
@@ -58,7 +58,12 @@ test("FFmpeg overlay has no background box and has outlined text with an opaque 
         title: "Test %{unsafe}: title",
       },
     };
-    const result = await overlay(c, settings),
+    assert.equal(formatTimeline(65), "01:05");
+    assert.equal(formatTimeline(8 * 60 * 60), "480:00");
+    const result = await overlay(c, settings, undefined, "", {
+        offset: 65,
+        total: 130,
+      }),
       output = path.join(root, "frame.rgb");
     await runCapture(
       "ffmpeg",
@@ -114,6 +119,11 @@ test("FFmpeg overlay has no background box and has outlined text with an opaque 
       }
     assert.ok(white > 30, "text remains fully opaque");
     assert.ok(black > 30, "text has a visible black outline");
+    let timelineOutline = 0;
+    for (let y = 660; y < 710; y++)
+      for (let x = 1050; x < 1260; x++)
+        if (rgb(x, y).every((v) => v < 30)) timelineOutline++;
+    assert.ok(timelineOutline > 20, "bottom-right timecode has a black outline");
     const redPoints = [];
     for (let y = 620; y < 692; y++)
       for (let x = 28; x < 110; x++)

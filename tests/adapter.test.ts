@@ -19,9 +19,11 @@ test("experimental adapter is opt-in, uses YouTube media URLs, deduplicates down
   let calls = 0;
   let active = 0,
     maxActive = 0;
+  const progress: number[] = [];
+  const deleted: string[] = [];
   const source = new ExperimentalYouTubeSource(
     c,
-    async (_binary, args, signal) => {
+    async (_binary, args, signal, _timeout, _check, onOutput) => {
       calls++;
       active++;
       maxActive = Math.max(maxActive, active);
@@ -29,10 +31,20 @@ test("experimental adapter is opt-in, uses YouTube media URLs, deduplicates down
       assert.ok(args.includes("--ignore-config"));
       assert.ok(args.includes("--js-runtimes"));
       assert.ok(args.at(-1)?.startsWith("https://www.youtube.com/watch?v="));
+      assert.ok(args.includes("--progress-template"));
+      onOutput?.("download: 37.5%\n");
       const template = args[args.indexOf("-o") + 1];
       await writeFile(template.replace("%(ext)s", "mp4"), "test media bytes");
       active--;
       return "";
+    },
+    { height: 720, fps: 30 },
+    {
+      onDownload: (activity) => {
+        if (activity?.percent !== null && activity?.percent !== undefined)
+          progress.push(activity.percent);
+      },
+      onDelete: (filename) => deleted.push(filename),
     },
   );
   const item = (videoId: string): PlaylistItem => ({
@@ -77,6 +89,8 @@ test("experimental adapter is opt-in, uses YouTube media URLs, deduplicates down
     assert.ok(names.includes(d.videoId + ".720p30.mp4"));
     assert.ok(!names.includes(a.videoId + ".720p30.mp4"));
     assert.equal(maxActive, 1, "different video downloads must remain serialized");
+    assert.ok(progress.includes(0) && progress.includes(37.5) && progress.includes(100));
+    assert.ok(deleted.some((name) => name.startsWith(a.videoId + ".")));
     const abort = new AbortController();
     const pending = withCancellation(new Promise(() => {}), abort.signal);
     abort.abort();

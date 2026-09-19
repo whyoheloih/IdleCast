@@ -435,6 +435,28 @@ header p {
 .timeline progress::-webkit-progress-value {
   background: #b6ee7a;
 }
+.download-progress {
+  margin: 14px 22px 0;
+  color: #a1a8b1;
+  font-size: 10px;
+}
+.download-progress > div {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 8px;
+  align-items: center;
+  margin-bottom: 7px;
+}
+.download-progress b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #e6e9ed;
+}
+.download-progress progress {
+  width: 100%;
+  accent-color: #b6ee7a;
+}
 .controls {
   display: flex;
   gap: 8px;

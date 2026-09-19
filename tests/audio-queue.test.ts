@@ -68,7 +68,9 @@ test("full title and upload date fit beside avatar without truncation",()=>{
   const layout=overlayLayout({...defaults,overlay:{...defaults.overlay,avatar:"avatar.png",title}},"2026-09-13T12:00:00Z");
   assert.equal(layout.title.replace(/\s/g,""),title.replace(/\s/g,""));
   assert.equal(layout.date,"Sep.13.26");
-  assert.equal(layout.textY,layout.avatarY);
-  assert.ok(layout.dateOffset+layout.dateSize*1.5<=defaults.overlay.avatarSize);
+  const blockHeight=layout.dateOffset+layout.dateSize*1.5;
+  assert.ok(layout.textY>=layout.avatarY);
+  assert.ok(layout.textY+blockHeight<=layout.avatarY+defaults.overlay.avatarSize);
+  assert.ok(Math.abs((layout.textY+blockHeight/2)-(layout.avatarY+defaults.overlay.avatarSize/2))<1);
   assert.equal(formatUploadDate(""),"");
 });

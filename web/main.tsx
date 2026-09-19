@@ -38,6 +38,7 @@ type Snapshot = {
   lastSync: number;
   desired: boolean;
   excluded: number;
+  download: { videoId: string; title: string; percent: number | null } | null;
 };
 async function api(url: string, method = "GET", body?: unknown) {
   const r = await fetch("/api/" + url, {
@@ -467,6 +468,29 @@ function App() {
                       : "—"}
                   </span>
                 </div>
+                {state?.download && (
+                  <div className="download-progress">
+                    <div>
+                      <span>
+                        {state.download.percent === 100
+                          ? "Downloaded"
+                          : "Downloading"}
+                      </span>
+                      <b>{state.download.title}</b>
+                      <output>
+                        {state.download.percent === null
+                          ? "Working…"
+                          : Math.round(state.download.percent) + "%"}
+                      </output>
+                    </div>
+                    <progress
+                      max={100}
+                      {...(state.download.percent === null
+                        ? {}
+                        : { value: state.download.percent })}
+                    />
+                  </div>
+                )}
                 <div className="controls">
                   <button
                     className="primary"

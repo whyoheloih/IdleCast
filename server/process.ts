@@ -75,6 +75,7 @@ export async function runCapture(
   signal: AbortSignal,
   timeout = 30000,
   check?: () => Promise<void>,
+  onOutput?: (chunk: string) => void,
 ): Promise<string> {
   const bounded = new AbortController();
   const combined = AbortSignal.any([signal, bounded.signal]);
@@ -83,7 +84,9 @@ export async function runCapture(
   let checking = false;
   let failureReason = "Media operation timed out";
   child.stdout?.on("data", (chunk) => {
-    if (output.length < 1048576) output += String(chunk);
+    const text = String(chunk);
+    onOutput?.(text);
+    if (output.length < 1048576) output += text;
     else bounded.abort();
   });
   const timer = setTimeout(() => bounded.abort(), timeout);

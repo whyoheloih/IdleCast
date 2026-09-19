@@ -10,9 +10,9 @@ IdleCast uses the **official YouTube Data API for metadata and ordering only**. 
 
 - Complete YouTube playlist pagination, duplicate entries, original ordering, scheduled/manual resync, and atomic snapshots.
 - SQLite migrations, durable playback intent and cursor, five-second progress checkpoints, restart recovery, per-item failure cooldowns, and continuous looping.
-- A bounded media cache, next-item prefetch, and a branded standby stream while downloads are slow or all items are temporarily unavailable.
+- A two-video rolling media cache, serialized next-item prefetch, visible download progress, cache-deletion logs, and a branded standby stream while downloads are slow or items are unavailable.
 - Selectable 720p or 1080p H.264/AAC output at 24, 30, or 60 fps, shared by independent RTMPS output workers.
-- Current video title in the bottom-left: **white text with a black outline and no background rectangle**. Avatars use a proportional center crop to fill a square.
+- Current video title and upload date in the bottom-left plus elapsed/total time in the bottom-right: **white text with a black outline and no background rectangle**. The title/date block is centered beside a proportional square avatar crop.
 - Combined playlist/channel queues, title exclusions, reshuffling, and manual queue ordering. Shuffled queues start at 15 minutes or less and keep videos over 70 minutes from playing consecutively.
 - In-app API/stream-key fields with encrypted storage and immediate application while playback is stopped; environment credentials remain a fallback.
 - Responsive dark React/TypeScript/Tailwind dashboard with setup/settings, virtualized playlist, live SSE updates, event logs, and health checks.
@@ -100,7 +100,7 @@ Dashboard settings are stored in SQLite. Defaults are 720p, 30 fps, 2500 kbps vi
 
 For an avatar, put `avatar.png` (or JPEG) in `media/avatars` and enter the filename in Settings. Open **Overlay preview** from Settings, or **Preview / resize overlay** from Overview. Adjust the **Text size** (12–96 px) and **Profile picture size** (24–240 px) sliders independently; edge spacing is also adjustable. Choose **Save overlay** to persist just the overlay, or **Cancel** to discard the preview edits. Other unsaved settings remain intact.
 
-The preview uses the same FFmpeg overlay renderer as the broadcast. During playback it shows snapshots of the current video refreshed roughly every two seconds; while stopped/preparing it shows a standby canvas. It has no audio and is not a full-motion destination/player monitor. Previewing is available during playback, but saving requires stopped playback and no active sync. Draft renders never modify broadcast text files. The overlay stays bottom-left with outlined white text and no background rectangle. Long titles are clipped conservatively to fit the frame.
+The preview uses the same FFmpeg overlay renderer as the broadcast. During playback it shows snapshots of the current video refreshed roughly every two seconds; while stopped/preparing it shows a standby canvas. It has no audio and is not a full-motion destination/player monitor. Previewing is available during playback, but saving requires stopped playback and no active sync. Draft renders never modify broadcast text files. The overlay stays bottom-left with outlined white text and no background rectangle. Long titles remain complete and automatically scale or wrap to fit beside the avatar.
 
 ## Operational limits
 

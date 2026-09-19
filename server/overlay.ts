@@ -33,12 +33,19 @@ export function overlayLayout(s: Settings, publishedAt = "") {
     if (lines.length * size * 1.25 + (date ? Math.max(1, Math.round(size * .65)) * 1.5 : 0) <= availableHeight) break;
   }
   const title = lines.join("\n");
+  const dateSize = Math.max(1, Math.round(size * .65));
+  const textHeight =
+    lines.length * size * 1.25 + (date ? dateSize * 1.5 : 0);
+  const avatarY =
+    s.height - margin - height + (height - avatarSize) / 2;
   return {
     title,
     date,
     fontSize: size,
-    dateSize: Math.max(1, Math.round(size * .65)),
-    textY: s.height - margin - height + (height - (hasAvatar ? avatarSize : availableHeight)) / 2,
+    dateSize,
+    textY: hasAvatar
+      ? avatarY + Math.max(0, (avatarSize - textHeight) / 2)
+      : s.height - margin - height + Math.max(0, (height - textHeight) / 2),
     dateOffset: lines.length * size * 1.25,
     x: margin,
     y: s.height - margin - height,
@@ -50,8 +57,13 @@ export function overlayLayout(s: Settings, publishedAt = "") {
     textX: margin + textInset,
     centerY: s.height - margin - height / 2,
     avatarX: margin + 10,
-    avatarY: s.height - margin - height + (height - avatarSize) / 2,
+    avatarY,
   };
+}
+
+export function formatTimeline(value: number) {
+  const seconds = Math.max(0, Math.floor(value));
+  return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
 export function formatUploadDate(value: string) {
@@ -68,6 +80,7 @@ export async function overlay(
   s: Settings,
   directory = path.join(c.DATA_DIR, "overlay"),
   publishedAt = "",
+  timeline?: { offset: number; total: number },
 ): Promise<{ inputs: string[]; filter: string }> {
   const base = `[0:v:0]scale=${s.width}:${s.height}:force_original_aspect_ratio=decrease,pad=${s.width}:${s.height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${s.fps},format=yuv420p[base]`;
   if (!s.overlay.enabled)
@@ -82,8 +95,12 @@ export async function overlay(
     ? await containedFile(path.join(c.MEDIA_DIR, "avatars"), s.overlay.avatar)
     : "";
   const style = `fontfile='${filterPath(c.FONT_FILE)}':expansion=none:fontcolor=white:bordercolor=black:borderw=${Math.max(1, Math.round(layout.fontSize / 12))}`;
+  const timelineText = timeline
+    ? `%{eif\\:floor((t+${Math.max(0, timeline.offset)})/60)\\:d\\:2}\\:%{eif\\:floor(t+${Math.max(0, timeline.offset)})-60*floor((t+${Math.max(0, timeline.offset)})/60)\\:d\\:2}/${formatTimeline(timeline.total).replace(/:/g, "\\:")}`
+    : "";
   const draw = `drawtext=${style}:textfile='${filterPath(textFile)}':fontsize=${layout.fontSize}:line_spacing=${Math.ceil(layout.fontSize * .25)}:x=${layout.textX}:y=${layout.textY}` +
-    (layout.date ? `,drawtext=${style}:textfile='${filterPath(dateFile)}':fontsize=${layout.dateSize}:x=${layout.textX}:y=${layout.textY + layout.dateOffset}` : "");
+    (layout.date ? `,drawtext=${style}:textfile='${filterPath(dateFile)}':fontsize=${layout.dateSize}:x=${layout.textX}:y=${layout.textY + layout.dateOffset}` : "") +
+    (timelineText ? `,drawtext=${style.replace("expansion=none", "expansion=normal")}:text='${timelineText}':fontsize=${layout.dateSize}:x=w-tw-${s.overlay.margin}:y=h-th-${s.overlay.margin}` : "");
   const box = `[base]null[box]`;
   if (!avatar)
     return { inputs: [], filter: base + ";" + box + ";[box]" + draw + "[v]" };
