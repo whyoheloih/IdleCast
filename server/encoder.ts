@@ -11,7 +11,7 @@ export function encodeArgs(
       ? [
           "[f=mpegts:mpegts_flags=+initial_discontinuity:onfail=ignore]udp://127.0.0.1:" +
             (basePort + n) +
-            "?pkt_size=1316",
+            "?pkt_size=1316&buffer_size=4194304",
         ]
       : [],
   );
@@ -44,8 +44,6 @@ export function encodeArgs(
     "48000",
     "-ac",
     "2",
-    "-af",
-    "aresample=48000:async=0:first_pts=0:out_sample_fmt=fltp:out_chlayout=stereo,asetpts=N/SR/TB",
     "-output_ts_offset",
     String(offset),
     "-f",

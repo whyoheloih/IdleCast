@@ -261,7 +261,23 @@ export class Engine extends EventEmitter {
         const started = Date.now();
         let lastProgress = started,
           lastFrame = -1,
-          buffer = "";
+          buffer = "",
+          lastTransportWarning = 0;
+        child.stderr?.on("data", (chunk) => {
+          if (
+            /overrun|circular buffer|non-monoton|timestamp|drop/i.test(
+              String(chunk),
+            ) &&
+            Date.now() - lastTransportWarning > 15000
+          ) {
+            lastTransportWarning = Date.now();
+            this.event(
+              name +
+                " transport buffering warning; check network stability and encoder load",
+              "warn",
+            );
+          }
+        });
         const watchdog = setInterval(() => {
           if (Date.now() - lastProgress > 30000) worker.abort();
         }, 5000);

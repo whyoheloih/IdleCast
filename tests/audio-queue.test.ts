@@ -20,13 +20,15 @@ test("44.1 and 48 kHz audio retain tone pitch and duration after encoding", asyn
   const signal = new AbortController().signal;
   try {
     for (const rate of [44100,48000]) {
+      const duration = 180;
       const file = path.join(root, `${rate}.m4a`), pcm = path.join(root, `${rate}.pcm`);
       const args = encodeArgs(defaults,19000,0);
-      await runCapture("ffmpeg", ["-y","-f","lavfi","-i",`sine=frequency=1000:sample_rate=${rate}:duration=3,asetpts=PTS*1.02`,"-vn",...args.slice(args.indexOf("-c:a"), -3),file],signal);
-      const stream = JSON.parse(await runCapture("ffprobe", ["-v","error","-select_streams","a:0","-show_entries","stream=sample_rate,channels","-of","json",file],signal)).streams[0];
-      assert.equal(stream.sample_rate,"48000");
-      assert.equal(stream.channels,2);
-      await runCapture("ffmpeg",["-y","-i",file,"-ac","1","-ar","48000","-f","f32le",pcm],signal);
+      await runCapture("ffmpeg", ["-y","-f","lavfi","-i",`sine=frequency=1000:sample_rate=${rate}:duration=${duration}`,"-vn",...args.slice(args.indexOf("-c:a"), -3),file],signal);
+      const probe = JSON.parse(await runCapture("ffprobe", ["-v","error","-select_streams","a:0","-show_entries","stream=sample_rate,channels:format=duration","-of","json",file],signal));
+      assert.equal(probe.streams[0].sample_rate,"48000");
+      assert.equal(probe.streams[0].channels,2);
+      assert.ok(Math.abs(Number(probe.format.duration)-duration)<.1);
+      await runCapture("ffmpeg",["-y","-ss",String(duration-3),"-i",file,"-ac","1","-ar","48000","-t","3","-f","f32le",pcm],signal);
       const data = await readFile(pcm);
       let crossings = 0, peakStep = 0;
       for(let n=4801;n<124800;n++) {
@@ -34,23 +36,27 @@ test("44.1 and 48 kHz audio retain tone pitch and duration after encoding", asyn
         if(a<=0 && b>0)crossings++;
         peakStep=Math.max(peakStep,Math.abs(b-a));
       }
-      assert.ok(Math.abs(crossings/2.5-1000)<2, `pitch changed at ${rate}`);
-      assert.ok(peakStep<.04, `unexpected impulse at ${rate}`);
-      assert.ok(Math.abs(data.length/4/48000-3)<.06);
+      assert.ok(Math.abs(crossings/2.5-1000)<2, `pitch changed near 3 minutes at ${rate}`);
+      assert.ok(peakStep<.04, `unexpected impulse near 3 minutes at ${rate}`);
     }
   } finally {await rm(root,{recursive:true,force:true});}
 });
 
-test("audio clock does not stretch to timestamps and UDP handoff has a bounded receive buffer", () => {
-  const args = encodeArgs(defaults, 19000, 0);
-  const filter = args[args.indexOf("-af") + 1];
-  assert.match(filter, /aresample=48000:async=0/);
-  assert.match(filter, /out_chlayout=stereo/);
-  assert.match(filter, /asetpts=N\/SR\/TB/);
-  const output = new RtmpOutput("youtube", "test-key").args(defaults, 19000);
+test("audio preserves source timestamps and UDP handoff absorbs upload stalls", () => {
+  const settings = {
+    ...defaults,
+    youtube: { ...defaults.youtube, enabled: true },
+  };
+  const args = encodeArgs(settings, 19000, 0);
+  assert.equal(args.includes("-af"), false);
+  assert.equal(args[args.indexOf("-ar") + 1], "48000");
+  assert.equal(args[args.indexOf("-ac") + 1], "2");
+  assert.match(args.at(-1)!, /buffer_size=4194304/);
+  const output = new RtmpOutput("youtube", "test-key").args(settings, 19000);
+  assert.equal(output[output.indexOf("-thread_queue_size") + 1], "8192");
   const input = output[output.indexOf("-i") + 1];
   assert.match(input, /buffer_size=4194304/);
-  assert.match(input, /fifo_size=65536/);
+  assert.match(input, /fifo_size=262144/);
 });
 
 test("shuffle starts short and separates long videos when possible", () => {
