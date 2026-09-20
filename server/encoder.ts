@@ -1,10 +1,38 @@
+import { mkdir, writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Config, Settings } from "./config.js";
 import { launch, completion, delay } from "./process.js";
-import { overlay } from "./overlay.js";
+import { filterPath, overlay } from "./overlay.js";
+
 export function audioSampleRate(s: Settings): 44100 | 48000 {
   // YouTube stereo ingest and playback use 44.1 kHz. Avoid a long-running
   // 48 -> 44.1 kHz clock conversion when YouTube is the only destination.
   return s.youtube.enabled && !s.twitch.enabled ? 44100 : 48000;
+}
+
+export function loadingText(
+  activity: { percent: number | null } | null,
+): string {
+  const percent = activity?.percent;
+  if (percent === null || percent === undefined)
+    return "Preparing next video...\n[░░░░░░░░░░░░░░░░░░░░]";
+  const normalized = Math.max(0, Math.min(100, percent));
+  const filled = Math.round(normalized / 5);
+  const label = normalized >= 100 ? "Finalizing next video..." : "Downloading next video...";
+  return `${label}\n[${"█".repeat(filled)}${"░".repeat(20 - filled)}] ${Math.round(normalized)}%`;
+}
+
+function loadingFile(c: Config) {
+  return path.join(c.DATA_DIR, "overlay", "loading.txt");
+}
+
+export async function writeLoadingStatus(
+  c: Config,
+  activity: { percent: number | null } | null,
+) {
+  const file = loadingFile(c);
+  await mkdir(path.dirname(file), { recursive: true });
+  await writeFile(file, loadingText(activity));
 }
 
 export function encodeArgs(
@@ -70,7 +98,24 @@ export function standby(
     await delay(1000, combined);
     while (!combined.aborted) {
       try {
+        const loading = loadingFile(c);
+        await mkdir(path.dirname(loading), { recursive: true });
+        await writeFile(loading, loadingText(null), { flag: "wx" }).catch(
+          (error: NodeJS.ErrnoException) => {
+            if (error.code !== "EEXIST") throw error;
+          },
+        );
         const ov = await overlay(c, s);
+        const cat = path.resolve("media", "loading-cat.gif");
+        const catIndex = ov.inputs.length ? 3 : 2;
+        const catSize = Math.round(s.height * 0.24);
+        const statusSize = Math.max(24, Math.round(s.height / 30));
+        const statusStyle = `fontfile='${filterPath(c.FONT_FILE)}':expansion=none:fontcolor=white:bordercolor=black:borderw=${Math.max(2, Math.round(statusSize / 12))}`;
+        const standbyFilter =
+          ov.filter +
+          `;[${catIndex}:v:0]scale=${catSize}:${catSize}:force_original_aspect_ratio=decrease,format=rgba[loadingCat]` +
+          `;[v][loadingCat]overlay=x=(W-w)/2:y=(H-h)/2-${Math.round(s.height * 0.08)}:shortest=0:eof_action=repeat[catLayer]` +
+          `;[catLayer]drawtext=${statusStyle}:textfile='${filterPath(loading)}':reload=1:fontsize=${statusSize}:line_spacing=${Math.round(statusSize * 0.4)}:x=(w-tw)/2:y=h*0.68[standby]`;
         const child = launch(
           c.FFMPEG_PATH,
           [
@@ -87,10 +132,14 @@ export function standby(
             "-i",
             `anullsrc=r=${audioSampleRate(s)}:cl=stereo`,
             ...ov.inputs,
+            "-stream_loop",
+            "-1",
+            "-i",
+            cat,
             "-filter_complex",
-            ov.filter,
+            standbyFilter,
             "-map",
-            "[v]",
+            "[standby]",
             "-map",
             "1:a:0",
             ...encodeArgs(s, c.UDP_BASE_PORT, (Date.now() - epoch) / 1000),

@@ -30,7 +30,7 @@ import {
 } from "./queue.js";
 import { playlistId as parsePlaylistId } from "./config.js";
 import { overlay } from "./overlay.js";
-import { audioSampleRate, encodeArgs, standby } from "./encoder.js";
+import { audioSampleRate, encodeArgs, standby, writeLoadingStatus } from "./encoder.js";
 export type OutputState = {
   status: "disabled" | "connecting" | "sending" | "retrying" | "stopped";
   retries: number;
@@ -332,6 +332,7 @@ export class Engine extends EventEmitter {
         : new ExperimentalYouTubeSource(this.config, undefined, s, {
             onDownload: (download) => {
               this.download = download;
+              void writeLoadingStatus(this.config, download).catch(() => {});
               this.event();
             },
             onDelete: (filename) =>
