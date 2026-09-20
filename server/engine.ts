@@ -30,7 +30,7 @@ import {
 } from "./queue.js";
 import { playlistId as parsePlaylistId } from "./config.js";
 import { overlay } from "./overlay.js";
-import { encodeArgs, standby } from "./encoder.js";
+import { audioSampleRate, encodeArgs, standby } from "./encoder.js";
 export type OutputState = {
   status: "disabled" | "connecting" | "sending" | "retrying" | "stopped";
   retries: number;
@@ -462,7 +462,8 @@ export class Engine extends EventEmitter {
             (x: any) => x.codec_type === "audio",
           );
           const audio = info.streams.find((x: any) => x.codec_type === "audio");
-          this.event(audio ? `Audio input: ${audio.codec_name}, ${audio.sample_rate} Hz, ${audio.channels} channels; output AAC 48000 Hz stereo` : "Video has no audio; using silence");
+          const outputAudioRate = audioSampleRate(s);
+          this.event(audio ? `Audio input: ${audio.codec_name}, ${audio.sample_rate} Hz, ${audio.channels} channels; output AAC ${outputAudioRate} Hz stereo` : `Video has no audio; using ${outputAudioRate} Hz stereo silence`);
           const ov = await overlay(this.config, {
             ...s,
             overlay: { ...s.overlay, title: item.title },
@@ -489,7 +490,7 @@ export class Engine extends EventEmitter {
             "-f",
             "lavfi",
             "-i",
-            "anullsrc=r=48000:cl=stereo",
+            `anullsrc=r=${outputAudioRate}:cl=stereo`,
             ...ov.inputs,
             "-filter_complex",
             ov.filter,

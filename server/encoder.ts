@@ -1,6 +1,12 @@
 import type { Config, Settings } from "./config.js";
 import { launch, completion, delay } from "./process.js";
 import { overlay } from "./overlay.js";
+export function audioSampleRate(s: Settings): 44100 | 48000 {
+  // YouTube stereo ingest and playback use 44.1 kHz. Avoid a long-running
+  // 48 -> 44.1 kHz clock conversion when YouTube is the only destination.
+  return s.youtube.enabled && !s.twitch.enabled ? 44100 : 48000;
+}
+
 export function encodeArgs(
   s: Settings,
   basePort: number,
@@ -41,7 +47,7 @@ export function encodeArgs(
     "-b:a",
     "128k",
     "-ar",
-    "48000",
+    String(audioSampleRate(s)),
     "-ac",
     "2",
     "-output_ts_offset",
@@ -79,7 +85,7 @@ export function standby(
             "-f",
             "lavfi",
             "-i",
-            "anullsrc=r=48000:cl=stereo",
+            `anullsrc=r=${audioSampleRate(s)}:cl=stereo`,
             ...ov.inputs,
             "-filter_complex",
             ov.filter,

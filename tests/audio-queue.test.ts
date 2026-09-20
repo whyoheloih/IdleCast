@@ -25,10 +25,11 @@ test("44.1 and 48 kHz audio retain tone pitch and duration after encoding", asyn
     for (const rate of [44100,48000]) {
       const duration = 180;
       const file = path.join(root, `${rate}.m4a`), pcm = path.join(root, `${rate}.pcm`);
-      const args = encodeArgs(defaults,19000,0);
+      const settings = {...defaults,youtube:{...defaults.youtube,enabled:true}};
+      const args = encodeArgs(settings,19000,0);
       await runCapture("ffmpeg", ["-y","-f","lavfi","-i",`sine=frequency=1000:sample_rate=${rate}:duration=${duration}`,"-vn",...args.slice(args.indexOf("-c:a"), -3),file],signal);
       const probe = JSON.parse(await runCapture("ffprobe", ["-v","error","-select_streams","a:0","-show_entries","stream=sample_rate,channels:format=duration","-of","json",file],signal));
-      assert.equal(probe.streams[0].sample_rate,"48000");
+      assert.equal(probe.streams[0].sample_rate,"44100");
       assert.equal(probe.streams[0].channels,2);
       assert.ok(Math.abs(Number(probe.format.duration)-duration)<.1);
       await runCapture("ffmpeg",["-y","-ss",String(duration-3),"-i",file,"-ac","1","-ar","48000","-t","3","-f","f32le",pcm],signal);
@@ -52,7 +53,7 @@ test("audio preserves source timestamps and UDP handoff absorbs upload stalls", 
   };
   const args = encodeArgs(settings, 19000, 0);
   assert.equal(args.includes("-af"), false);
-  assert.equal(args[args.indexOf("-ar") + 1], "48000");
+  assert.equal(args[args.indexOf("-ar") + 1], "44100");
   assert.equal(args[args.indexOf("-ac") + 1], "2");
   assert.match(args.at(-1)!, /buffer_size=4194304/);
   const output = new RtmpOutput("youtube", "test-key").args(settings, 19000);
@@ -61,6 +62,16 @@ test("audio preserves source timestamps and UDP handoff absorbs upload stalls", 
   const input = output[output.indexOf("-i") + 1];
   assert.match(input, /buffer_size=4194304/);
   assert.match(input, /fifo_size=262144/);
+});
+
+test("shared YouTube and Twitch encoding retains 48 kHz audio", () => {
+  const settings = {
+    ...defaults,
+    youtube: { ...defaults.youtube, enabled: true },
+    twitch: { ...defaults.twitch, enabled: true },
+  };
+  const args = encodeArgs(settings, 19000, 0);
+  assert.equal(args[args.indexOf("-ar") + 1], "48000");
 });
 
 test("shuffle starts with two short videos and gives 3-hour videos download lead time", () => {
