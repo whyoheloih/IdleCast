@@ -56,6 +56,7 @@ test("audio preserves source timestamps and UDP handoff absorbs upload stalls", 
   assert.equal(args[args.indexOf("-ac") + 1], "2");
   assert.match(args.at(-1)!, /buffer_size=4194304/);
   const output = new RtmpOutput("youtube", "test-key").args(settings, 19000);
+  assert.equal(output[output.indexOf("-loglevel") + 1], "warning");
   assert.equal(output[output.indexOf("-thread_queue_size") + 1], "8192");
   const input = output[output.indexOf("-i") + 1];
   assert.match(input, /buffer_size=4194304/);

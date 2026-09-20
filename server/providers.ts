@@ -379,7 +379,7 @@ export class RtmpOutput implements StreamOutputProvider {
     return [
       "-hide_banner",
       "-loglevel",
-      "error",
+      "warning",
       "-fflags",
       "+genpts+discardcorrupt",
       "-thread_queue_size",
