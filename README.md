@@ -105,8 +105,9 @@ The preview uses the same FFmpeg overlay renderer as the broadcast. During playb
 ## Operational limits
 
 - YouTube media extraction is **experimental** and can break when YouTube changes. API metadata access does not provide download permission or downloadable media.
-- API-key access supports accessible public/unlisted playlists. Private playlists require OAuth, which is not implemented. Restricted, private, deleted, live, geographic, age-gated, DRM-protected, or otherwise inaccessible media may be skipped. Cookie import and access-control bypass are not implemented.
+- API-key access supports accessible public/unlisted playlists. Private playlists require OAuth, which is not implemented. Restricted, private, deleted, live, geographic, age-gated, DRM-protected, or otherwise inaccessible media may be skipped. Cookie files authenticate media extraction only; they do not add private-playlist metadata access or bypass access controls.
 - yt-dlp uses its installed JavaScript support with Node and downloads/merges video and audio. Docker pins a verified release; update the `YTDLP_VERSION` build argument when an upstream fix is needed. No extraction success is guaranteed.
+- If YouTube requests account verification, export a dedicated Netscape-format cookie file outside Git and set `YTDLP_COOKIES_FILE` to its absolute path. IdleCast passes it to yt-dlp without logging its contents.
 - The cache retains the playing item and next download. Temporary fragments/merge files count toward the cache budget; the monitor can stop a download early. Leave disk headroom: polling is not a filesystem quota.
 - Missing/failed items retry after five minutes. If none are eligible, the standby stream continues and eligibility is rechecked.
 - Brief timestamp/decoder transitions and network outages remain possible. Standby is not an uptime guarantee. Output “sending” means FFmpeg reports progress; it does not prove viewers can watch.

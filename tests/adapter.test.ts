@@ -15,6 +15,7 @@ test("experimental adapter is opt-in, uses YouTube media URLs, deduplicates down
     ADMIN_PASSWORD: "test-password-long-enough",
     DATA_DIR: root,
     EXPERIMENTAL_YOUTUBE: "true",
+    YTDLP_COOKIES_FILE: path.join(root, "youtube-cookies.txt"),
   });
   let calls = 0;
   let active = 0,
@@ -29,6 +30,10 @@ test("experimental adapter is opt-in, uses YouTube media URLs, deduplicates down
       maxActive = Math.max(maxActive, active);
       signal.throwIfAborted();
       assert.ok(args.includes("--ignore-config"));
+      assert.equal(
+        args[args.indexOf("--cookies") + 1],
+        path.join(root, "youtube-cookies.txt"),
+      );
       assert.ok(args.includes("--js-runtimes"));
       assert.ok(args.at(-1)?.startsWith("https://www.youtube.com/watch?v="));
       assert.ok(args.includes("--progress-template"));

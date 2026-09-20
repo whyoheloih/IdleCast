@@ -57,6 +57,7 @@ export const envSchema = z.object({
   FFMPEG_PATH: z.string().default("ffmpeg"),
   FFPROBE_PATH: z.string().default("ffprobe"),
   YTDLP_PATH: z.string().default("yt-dlp"),
+  YTDLP_COOKIES_FILE: z.string().default(""),
   FONT_FILE: z
     .string()
     .default("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
@@ -92,6 +93,8 @@ export function readConfig(env: NodeJS.ProcessEnv): Config {
   c.FFMPEG_PATH = executablePath(c.FFMPEG_PATH);
   c.FFPROBE_PATH = executablePath(c.FFPROBE_PATH);
   c.YTDLP_PATH = executablePath(c.YTDLP_PATH);
+  if (c.YTDLP_COOKIES_FILE)
+    c.YTDLP_COOKIES_FILE = path.resolve(c.YTDLP_COOKIES_FILE);
   return c;
 }
 const destination = (platform: "youtube" | "twitch") =>

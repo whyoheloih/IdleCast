@@ -278,6 +278,9 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
         this.c.YTDLP_PATH,
         [
           "--ignore-config",
+          ...(this.c.YTDLP_COOKIES_FILE
+            ? ["--cookies", this.c.YTDLP_COOKIES_FILE]
+            : []),
           "--no-playlist",
           "--newline",
           "--progress",
