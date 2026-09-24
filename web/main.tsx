@@ -23,12 +23,16 @@ import {
   ChevronDown,
   GripVertical,
   SlidersHorizontal,
+  ClipboardList,
+  Copy,
+  Terminal,
 } from "lucide-react";
 import type { Settings } from "../server/config";
 import type { StoredItem } from "../server/db";
 import { OverlayEditor } from "./OverlayEditor";
 import { Credentials } from "./Credentials";
 import { YouTubeViewer } from "./YouTubeViewer";
+import { updateCommand, updateHistory } from "../server/updates";
 import "./style.css";
 type Snapshot = {
   state: string;
@@ -87,6 +91,7 @@ const nav = [
   ["Playlist", ListVideo],
   ["Settings", Settings2],
   ["Logs", ScrollText],
+  ["Updates", ClipboardList],
   ["Health", HeartPulse],
 ] as const;
 function App() {
@@ -345,7 +350,7 @@ function App() {
           >
             <LogOut size={16} /> Sign out
           </button>
-          <small>IdleCast v1.0.0</small>
+          <small>IdleCast v1.1.0</small>
         </div>
       </aside>
       <main>
@@ -364,7 +369,9 @@ function App() {
                     ? "Make this station your own."
                     : page === "Logs"
                       ? "A clear record of what happened."
-                      : "The essentials behind your broadcast."}
+                      : page === "Updates"
+                        ? "See what changed and update your E-drive installation."
+                        : "The essentials behind your broadcast."}
             </p>
           </div>
           <div className="header-actions">
@@ -1159,6 +1166,58 @@ function App() {
               </div>
             )}
           </section>
+        )}
+        {page === "Updates" && (
+          <div className="updates-page">
+            <section className="panel update-command-card">
+              <div className="panel-heading">
+                <div>
+                  <span className="eyebrow">UPDATE COMMAND</span>
+                  <h2>Install the newest pushed version</h2>
+                </div>
+                <Terminal size={22} />
+              </div>
+              <p className="hint">
+                Stop the currently running IdleCast terminal, open PowerShell,
+                paste this command, and press Enter.
+              </p>
+              <div className="command-box">
+                <code>{updateCommand}</code>
+                <button
+                  type="button"
+                  onClick={() =>
+                    void navigator.clipboard.writeText(updateCommand).then(
+                      () => setNotice("Update command copied."),
+                      () => setError("Could not copy automatically. Select the command and copy it manually."),
+                    )
+                  }
+                >
+                  <Copy size={15} /> Copy command
+                </button>
+              </div>
+            </section>
+            {updateHistory.map((update, index) => (
+              <section className="panel update-card" key={update.version}>
+                <div className="update-title">
+                  <div>
+                    <span className="eyebrow">
+                      {index === 0 ? "LATEST UPDATE" : "PREVIOUS UPDATE"}
+                    </span>
+                    <h2>{update.title}</h2>
+                  </div>
+                  <div className="update-version">
+                    <b>v{update.version}</b>
+                    <time>{update.date}</time>
+                  </div>
+                </div>
+                <ul>
+                  {update.items.map((item) => (
+                    <li key={item}><Check size={15} /> <span>{item}</span></li>
+                  ))}
+                </ul>
+              </section>
+            ))}
+          </div>
         )}
         {page === "Health" &&
           (health ? (
