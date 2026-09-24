@@ -98,9 +98,15 @@ export async function overlay(
   const timelineText = timeline
     ? `%{eif\\:floor((t+${Math.max(0, timeline.offset)})/60)\\:d\\:2}\\:%{eif\\:floor(t+${Math.max(0, timeline.offset)})-60*floor((t+${Math.max(0, timeline.offset)})/60)\\:d\\:2}/${formatTimeline(timeline.total).replace(/:/g, "\\:")}`
     : "";
-  const draw = `drawtext=${style}:textfile='${filterPath(textFile)}':fontsize=${layout.fontSize}:line_spacing=${Math.ceil(layout.fontSize * .25)}:x=${layout.textX}:y=${layout.textY}` +
-    (layout.date ? `,drawtext=${style}:textfile='${filterPath(dateFile)}':fontsize=${layout.dateSize}:x=${layout.textX}:y=${layout.textY + layout.dateOffset}` : "") +
-    (timelineText ? `,drawtext=${style.replace("expansion=none", "expansion=normal")}:text='${timelineText}':fontsize=${layout.dateSize + 2}:x=w-tw-${s.overlay.margin}:y=h-th-${s.overlay.margin}` : "");
+  const countdownStart = timeline
+    ? Math.max(0, timeline.total - timeline.offset - 10)
+    : 0;
+  const countdown = timeline
+    ? `,drawtext=${style.replace("expansion=none", "expansion=normal")}:text='Next video in %{eif\\:max(0\\,ceil(${timeline.total - timeline.offset}-t))\\:d}':fontsize=${Math.max(40, Math.round(s.height / 16))}:x=(w-tw)/2:y=${Math.max(28, Math.round(s.height * .06))}:enable='between(t\\,${countdownStart}\\,${Math.max(countdownStart, timeline.total - timeline.offset)})':alpha='if(lt(t\\,${countdownStart + .6})\\,(t-${countdownStart})/.6\\,1)'`
+    : "";
+  const draw = `drawtext=${style}:textfile='${filterPath(textFile)}':reload=1:fontsize=${layout.fontSize}:line_spacing=${Math.ceil(layout.fontSize * .25)}:x=${layout.textX}:y=${layout.textY}` +
+    (layout.date ? `,drawtext=${style}:textfile='${filterPath(dateFile)}':reload=1:fontsize=${layout.dateSize}:x=${layout.textX}:y=${layout.textY + layout.dateOffset}` : "") +
+    (timelineText ? `,drawtext=${style.replace("expansion=none", "expansion=normal")}:text='${timelineText}':fontsize=${Math.max(layout.dateSize + 5, 18)}:x=w-tw-${s.overlay.margin}:y=h-th-${s.overlay.margin}` : "") + countdown;
   const box = `[base]null[box]`;
   if (!avatar)
     return { inputs: [], filter: base + ";" + box + ";[box]" + draw + "[v]" };

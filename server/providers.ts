@@ -13,6 +13,14 @@ export type PlaylistItem = {
   available: boolean;
   duration: number | null;
   publishedAt?: string;
+  regionRestricted?: boolean;
+  embeddable?: boolean;
+  failureCount?: number;
+  seriesKey?: string;
+  seriesIndex?: number | null;
+  isShort?: boolean;
+  playCount?: number;
+  selectionPenalty?: number;
 };
 export interface PlaylistProvider {
   fetch(playlistId: string, signal: AbortSignal): Promise<PlaylistItem[]>;
@@ -160,6 +168,23 @@ export class YouTubePlaylistProvider implements PlaylistProvider {
         v.snippet?.liveBroadcastContent !== "live";
       item.duration = v ? parseDuration(v.contentDetails?.duration) : null;
       item.publishedAt = v?.snippet?.publishedAt ?? "";
+      const shortMetadata = [
+        v?.snippet?.title,
+        v?.snippet?.description,
+        ...(Array.isArray(v?.snippet?.tags) ? v.snippet.tags : []),
+      ].join(" ");
+      // The Data API has no Shorts boolean. A Shorts marker plus the Shorts
+      // duration limit is the strongest signal available in this sync data.
+      item.isShort =
+        item.duration !== null &&
+        item.duration <= 180 &&
+        /(^|\s)#shorts?\b/i.test(shortMetadata);
+      const restriction = v?.contentDetails?.regionRestriction;
+      item.regionRestricted =
+        !!restriction &&
+        ((Array.isArray(restriction.allowed) && restriction.allowed.length >= 0) ||
+          (Array.isArray(restriction.blocked) && restriction.blocked.length > 0));
+      item.embeddable = v?.status?.embeddable !== false;
     }
     return items.sort((a, b) => a.position - b.position);
   }

@@ -4,7 +4,11 @@ import { mkdtemp, rm, readFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { defaults, readConfig, settingsSchema } from "../server/config.js";
-import { prepareQueue } from "../server/queue.js";
+import {
+  detectSeries,
+  estimatedDownloadGb,
+  prepareQueue,
+} from "../server/queue.js";
 import { YouTubePlaylistProvider } from "../server/providers.js";
 import { Store } from "../server/db.js";
 import { Engine } from "../server/engine.js";
@@ -71,7 +75,7 @@ test("channel handle resolves uploads and title filtering/shuffle preserves dupl
   assert.equal(q.excluded, 2);
   assert.deepEqual(
     q.items.map((i) => i.id),
-    ["2", "0"],
+    ["0", "2"],
   );
   assert.deepEqual(
     q.items.map((i) => i.position),
@@ -173,4 +177,66 @@ test("credentials API authenticates, encrypts, applies immediately, persists and
     db.close();
     await rm(root, { recursive: true, force: true });
   }
+});
+
+
+test("custom filters group numbered series, override content limits, and preserve safety restrictions", () => {
+  const make = (
+    id: string,
+    title: string,
+    duration: number,
+    publishedAt: string,
+    extra: Record<string, unknown> = {},
+  ) => ({
+    id,
+    videoId: ("video" + id).padEnd(11, "0").slice(0, 11),
+    position: Number(id),
+    title,
+    channel: "Test",
+    thumbnail: "",
+    available: true,
+    duration,
+    publishedAt,
+    ...extra,
+  });
+  const settings = settingsSchema.parse({
+    ...defaults,
+    filters: {
+      ...defaults.filters,
+      years: [2015],
+      durations: ["5to10"],
+      excludeRegionRestricted: true,
+      maxEstimatedSizeGb: 1,
+      maxFailures: 2,
+      seriesMode: "strict",
+    },
+  });
+  const queue = prepareQueue([
+    make("1", "Quest [1]", 500, "2015-01-01T00:00:00Z"),
+    make("2", "Quest [2]", 20_000, "2024-01-01T00:00:00Z", {
+      failureCount: 9,
+    }),
+    make("3", "Quest [3]", 500, "2015-01-01T00:00:00Z", {
+      regionRestricted: true,
+    }),
+    make("4", "Unrelated", 20_000, "2024-01-01T00:00:00Z", {
+      failureCount: 9,
+    }),
+  ], settings, () => 0);
+  assert.deepEqual(
+    queue.items.map((entry) => entry.title),
+    ["Quest [1]", "Quest [2]"],
+  );
+  assert.equal(queue.items[0].seriesKey, queue.items[1].seriesKey);
+  assert.deepEqual(queue.items.map((entry) => entry.seriesIndex), [1, 2]);
+  assert.equal(queue.detectedSeries, 1);
+  assert.equal(queue.reasons["regional restriction"], 1);
+  assert.equal(detectSeries("Show (3)", "strict")?.index, 3);
+  assert.equal(detectSeries("Show Episode 4", "strict")?.index, 4);
+  assert.equal(detectSeries("Show 5", "strict"), null);
+  assert.equal(detectSeries("Show 5", "smart")?.index, 5);
+  assert.ok(
+    estimatedDownloadGb(queue.items[1], settings)! >
+      estimatedDownloadGb(queue.items[0], settings)!,
+  );
 });

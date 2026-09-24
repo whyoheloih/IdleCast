@@ -1,4 +1,6 @@
 import { EventEmitter } from "node:events";
+import { readFile } from "node:fs/promises";
+import path from "node:path";
 import type { Config, Settings } from "./config.js";
 import { Store, type StoredItem } from "./db.js";
 import {
@@ -29,7 +31,7 @@ import {
   LONG_VIDEO_SECONDS,
 } from "./queue.js";
 import { playlistId as parsePlaylistId } from "./config.js";
-import { overlay } from "./overlay.js";
+import { overlay, overlayLayout } from "./overlay.js";
 import {
   audioSampleRate,
   encodeArgs,
@@ -72,10 +74,15 @@ export class Engine extends EventEmitter {
   private currentMedia: { file: string; duration: number } | null = null;
   private download: DownloadActivity | null = null;
   private bufferedIds = new Set<string>();
+  private preparedMedia = new Map<string, { file: string; info: any }>();
   private refillTask: Promise<void> | null = null;
   private readonly bufferLimit = 5;
   private bufferedCount = 0;
   private bufferTarget = 5;
+  private activeSource: MediaSourceProvider | null = null;
+  private queueRefreshPending = false;
+  private activationGeneration = 0;
+  private metadataTimer: ReturnType<typeof setTimeout> | null = null;
   previewSource() {
     if (this.state !== "playing" || !this.currentMedia || !this.clip)
       return null;
@@ -139,6 +146,10 @@ export class Engine extends EventEmitter {
       desired: this.store.get("desired", false),
       excluded: this.store.get("excludedCount", 0),
       download: this.download,
+      filterStats: this.store.get("filterStats", {
+        reasons: {},
+        detectedSeries: 0,
+      }),
       bufferedCount: this.bufferedCount,
       bufferTarget: this.bufferTarget,
     };
@@ -180,6 +191,31 @@ export class Engine extends EventEmitter {
               unique.set(item.videoId, item as StoredItem);
         }
         const fetched = [...unique.values()];
+        const failureHistory = this.store.get<Record<string, number>>(
+          "failureHistory",
+          {},
+        );
+        const existingFailures = new Map(
+          this.store
+            .all()
+            .map((item) => [item.videoId, item.failures] as const),
+        );
+        const playCounts = this.store.get<Record<string, number>>(
+          "playCounts",
+          {},
+        );
+        const selectionPenalties = this.store.get<Record<string, number>>(
+          "selectionPenalties",
+          {},
+        );
+        for (const item of fetched) {
+          item.failureCount =
+            failureHistory[item.videoId] ??
+            existingFailures.get(item.videoId) ??
+            0;
+          item.playCount = playCounts[item.videoId] ?? 0;
+          item.selectionPenalty = selectionPenalties[item.videoId] ?? 0;
+        }
         const queue = prepareQueue(fetched, settings);
         this.store.replace(queue.items);
         if (settings.shuffle) {
@@ -195,12 +231,19 @@ export class Engine extends EventEmitter {
           ),
         );
         this.store.set("excludedCount", queue.excluded);
+        this.store.set("selectionPenalties", queue.penalties);
+        this.store.set("filterStats", {
+          reasons: queue.reasons,
+          detectedSeries: queue.detectedSeries,
+        });
         this.event(
           "Playlist synchronized: " +
             queue.items.length +
             " items; " +
             queue.excluded +
-            " excluded",
+            " excluded; " +
+            queue.detectedSeries +
+            " series detected",
         );
       } catch {
         this.event(
@@ -246,8 +289,10 @@ export class Engine extends EventEmitter {
     this.controller = new AbortController();
     const signal = this.controller.signal;
     const source = this.source(s);
+    this.activeSource = source;
     let workers: Promise<void>[] = [];
     this.bufferedIds.clear();
+    this.preparedMedia.clear();
     this.bufferedCount = 0;
     const initial = this.bufferCandidates(this.store.all());
     this.bufferTarget = Math.min(this.bufferLimit, initial.length);
@@ -297,19 +342,54 @@ export class Engine extends EventEmitter {
           ? this.output(name, s, this.config.UDP_BASE_PORT + n, signal)
           : Promise.resolve(),
       );
-      await this.play(s, signal, source, Date.now());
+      const epoch = Date.now();
+      let supervisorFailures = 0;
+      while (!signal.aborted) {
+        try {
+          await this.play(s, signal, source, epoch);
+          if (!signal.aborted)
+            throw new Error("Playback loop ended unexpectedly");
+        } catch (error) {
+          if (signal.aborted) break;
+          supervisorFailures += 1;
+          this.clip?.abort();
+          this.clip = null;
+          this.currentMedia = null;
+          this.state = "recovering";
+          const wait = backoff(supervisorFailures - 1);
+          this.event(
+            `Playback supervisor recovered an unexpected failure while ${this.current?.title ?? "no video"} was active: ${error instanceof Error ? error.message : "unknown error"}. Retrying in ${Math.ceil(wait / 1000)} seconds`,
+            "error",
+          );
+          const idle = standby(this.config, s, epoch, signal, () =>
+            this.event("Recovery standby encoder failed; retrying", "error"),
+          );
+          try {
+            await delay(wait, signal);
+          } finally {
+            await idle.stop();
+          }
+        }
+      }
     })()
-      .catch(() => {
-        if (!signal.aborted) this.event("Playback supervisor failed", "error");
+      .catch((error) => {
+        if (!signal.aborted)
+          this.event(
+            "Playback startup failed: " +
+              (error instanceof Error ? error.message : "unknown error"),
+            "error",
+          );
       })
       .finally(async () => {
         this.controller?.abort();
         await source.close?.();
+        this.activeSource = null;
         await Promise.allSettled(workers);
         this.state = "stopped";
         this.current = null;
         this.download = null;
         this.bufferedIds.clear();
+        this.preparedMedia.clear();
         this.bufferedCount = 0;
         this.task = null;
         this.controller = null;
@@ -390,26 +470,40 @@ export class Engine extends EventEmitter {
               if (frame > 0 && frame > lastFrame) {
                 lastFrame = frame;
                 lastProgress = Date.now();
+                const recovered = this.outputs[name].status !== "sending";
                 this.outputs[name].status = "sending";
-                this.event();
+                if (recovered && attempt > 0)
+                  this.event(`${name} output recovered and is sending again`);
+                else this.event();
               }
             }
           }
         });
+        let code: number;
         try {
-          await completion(child);
+          code = await completion(child);
         } finally {
           clearInterval(watchdog);
         }
         if (signal.aborted) break;
+        if (code !== 0)
+          throw new Error(`${name} FFmpeg exited with code ${code}: ${mediaFailure(child)}`);
         if (Date.now() - started > 60000) attempt = 0;
-      } catch {
+      } catch (error) {
         if (signal.aborted) break;
+        this.event(
+          `${name} output process failed: ${error instanceof Error ? error.message : "unknown error"}`,
+          "error",
+        );
       }
       this.outputs[name] = { status: "retrying", retries: ++attempt };
-      this.event(name + " output disconnected; retry scheduled", "warn");
+      const wait = backoff(attempt - 1);
+      this.event(
+        `${name} output disconnected; automatic recovery attempt ${attempt} in ${Math.ceil(wait / 1000)} seconds`,
+        "warn",
+      );
       try {
-        await delay(backoff(attempt - 1), signal);
+        await delay(wait, signal);
       } catch {
         break;
       }
@@ -459,6 +553,30 @@ export class Engine extends EventEmitter {
     });
   }
 
+  private async probeMedia(file: string, signal: AbortSignal) {
+    const info = JSON.parse(
+      await runCapture(
+        this.config.FFPROBE_PATH,
+        [
+          "-v",
+          "error",
+          "-show_entries",
+          "stream=codec_type,codec_name,sample_rate,channels:format=duration",
+          "-of",
+          "json",
+          file,
+        ],
+        signal,
+      ),
+    );
+    if (!info.streams?.some((stream: any) => stream.codec_type === "video"))
+      throw new Error("No playable video stream");
+    const duration = Number(info.format?.duration);
+    if (!Number.isFinite(duration) || duration <= 0)
+      throw new Error("Media must have a finite duration");
+    return info;
+  }
+
   private async fillBuffer(
     source: MediaSourceProvider,
     items: StoredItem[],
@@ -487,15 +605,17 @@ export class Engine extends EventEmitter {
           item.title,
       );
       try {
-        await source.resolve(item, signal);
+        const file = await source.resolve(item, signal);
+        const info = await this.probeMedia(file, signal);
+        this.preparedMedia.set(item.videoId, { file, info });
         this.bufferedIds.add(item.videoId);
         this.bufferedCount = this.bufferedIds.size;
         this.download = null;
         this.event();
       } catch (error) {
         if (signal.aborted) throw error;
-        this.store.fail(
-          item.id,
+        this.recordFailure(
+          item,
           error instanceof Error ? error.message : "Media download failed",
         );
         this.event(
@@ -559,6 +679,12 @@ export class Engine extends EventEmitter {
       );
       const followsShuffleRules = (candidate: StoredItem, resuming = false) => {
         if (!s.shuffle || resuming) return true;
+        if (
+          candidate.seriesKey &&
+          candidate.seriesKey ===
+            this.store.get("lastVideoSeries", "")
+        )
+          return true;
         if (needsLongDownloadLead(candidate))
           return (
             lastVideoDuration !== null &&
@@ -631,27 +757,10 @@ export class Engine extends EventEmitter {
             item.title +
             ". The complete video is downloaded before playback.",
         );
-        const file = await source.resolve(item, clipSignal);
-        const info = JSON.parse(
-          await runCapture(
-            this.config.FFPROBE_PATH,
-            [
-              "-v",
-              "error",
-              "-show_entries",
-              "stream=codec_type,codec_name,sample_rate,channels:format=duration",
-              "-of",
-              "json",
-              file,
-            ],
-            clipSignal,
-          ),
-        );
-        if (!info.streams?.some((x: any) => x.codec_type === "video"))
-          throw new Error("No playable video stream");
-        const duration = Number(info.format?.duration);
-        if (!Number.isFinite(duration) || duration <= 0)
-          throw new Error("Media must have a finite duration");
+        const prepared = this.preparedMedia.get(item.videoId);
+        const file = prepared?.file ?? (await source.resolve(item, clipSignal));
+        const info = prepared?.info ?? (await this.probeMedia(file, clipSignal));
+        const duration = Number(info.format.duration);
         const offset = resume < duration - 1 ? resume : 0;
         const hasAudio = info.streams.some(
           (x: any) => x.codec_type === "audio",
@@ -723,6 +832,7 @@ export class Engine extends EventEmitter {
         }
         this.store.set("lastVideoLong", isLongVideo(item));
         this.store.set("lastVideoDuration", item.duration);
+        this.store.set("lastVideoSeries", item.seriesKey ?? "");
         this.store.set("cursor", { id: item.id, offset });
         this.event();
         this.scheduleRefill(source, items, signal, index);
@@ -739,6 +849,54 @@ export class Engine extends EventEmitter {
             if (line.startsWith("frame=")) {
               const n = Number(line.slice(6));
               if (Number.isFinite(n) && n > lastFrame) {
+                if (lastFrame < 0) {
+                  const generation = ++this.activationGeneration;
+                  const counts = this.store.get<Record<string, number>>(
+                    "playCounts",
+                    {},
+                  );
+                  counts[item!.videoId] = (counts[item!.videoId] ?? 0) + 1;
+                  this.store.set("playCounts", counts);
+                  if (this.metadataTimer) clearTimeout(this.metadataTimer);
+                  this.metadataTimer = setTimeout(() => {
+                    if (
+                      this.activationGeneration !== generation ||
+                      this.current?.videoId !== item!.videoId ||
+                      this.state !== "playing"
+                    ) return;
+                    const publishedAt = this.store.get<Record<string, string>>(
+                      "uploadDates",
+                      {},
+                    )[item!.videoId];
+                    const activeSettings = {
+                      ...s,
+                      overlay: { ...s.overlay, title: item!.title },
+                    };
+                    const expected = overlayLayout(activeSettings, publishedAt);
+                    const directory = path.join(this.config.DATA_DIR, "overlay");
+                    void Promise.all([
+                      readFile(path.join(directory, "title.txt"), "utf8").catch(() => ""),
+                      readFile(path.join(directory, "date.txt"), "utf8").catch(() => ""),
+                    ]).then(([title, date]) => {
+                      if (
+                        this.activationGeneration !== generation ||
+                        this.current?.videoId !== item!.videoId ||
+                        (title === expected.title && date === expected.date)
+                      ) return;
+                      return overlay(
+                        this.config,
+                        activeSettings,
+                        undefined,
+                        publishedAt,
+                        { offset: this.elapsed, total: duration },
+                      ).then(() =>
+                        this.event("Restored stale title/date overlay", "warn"),
+                      );
+                    }).catch(() =>
+                      this.event("Metadata sanity check could not refresh overlay", "warn"),
+                    );
+                  }, 5000);
+                }
                 lastFrame = n;
                 lastProgress = Date.now();
                 this.elapsed = Math.min(duration, offset + n / s.fps);
@@ -775,8 +933,8 @@ export class Engine extends EventEmitter {
           consumed = true;
           this.event("Skipped: " + item.title);
         } else {
-          this.store.fail(
-            item.id,
+          this.recordFailure(
+            item,
             error instanceof Error
               ? error.message
               : "Media failed; retry in 5 minutes",
@@ -790,6 +948,9 @@ export class Engine extends EventEmitter {
           );
         }
       } finally {
+        if (this.metadataTimer) clearTimeout(this.metadataTimer);
+        this.metadataTimer = null;
+        this.activationGeneration += 1;
         this.currentMedia = null;
         this.clip?.abort();
         await idle.stop();
@@ -797,6 +958,7 @@ export class Engine extends EventEmitter {
       }
       if (consumed) {
         this.bufferedIds.delete(item.videoId);
+        this.preparedMedia.delete(item.videoId);
         this.bufferedCount = this.bufferedIds.size;
         await source.remove?.(item.videoId).catch(() => {});
         this.event();
@@ -810,6 +972,72 @@ export class Engine extends EventEmitter {
     this.download = null;
     this.event();
   }
+  private recordFailure(item: StoredItem, message: string) {
+    this.store.fail(item.id, message);
+    const history = this.store.get<Record<string, number>>(
+      "failureHistory",
+      {},
+    );
+    history[item.videoId] = (history[item.videoId] ?? 0) + 1;
+    this.store.set("failureHistory", history);
+  }
+
+  queueChangePlan(items: StoredItem[]) {
+    if (this.state === "stopped") return { changesBuffer: false, removed: [], added: [] };
+    const at = Math.max(
+      0,
+      items.findIndex((item) => item.id === this.current?.id),
+    );
+    const wanted = this.bufferCandidates(items, at)
+      .slice(0, this.bufferLimit)
+      .map((item) => item.videoId);
+    const wantedSet = new Set(wanted);
+    return {
+      changesBuffer:
+        [...this.bufferedIds].some((id) => !wantedSet.has(id)) ||
+        wanted.some((id) => !this.bufferedIds.has(id)),
+      removed: [...this.bufferedIds].filter(
+        (id) => !wantedSet.has(id) && id !== this.current?.videoId,
+      ),
+      added: wanted.filter((id) => !this.bufferedIds.has(id)),
+    };
+  }
+
+  queueChanged() {
+    if (!this.activeSource || this.queueRefreshPending) return;
+    this.queueRefreshPending = true;
+    const refresh = async () => {
+      await this.refillTask?.catch(() => {});
+      if (!this.activeSource || !this.controller || this.controller.signal.aborted)
+        return;
+      const items = this.store.all();
+      const at = Math.max(
+        0,
+        items.findIndex((item) => item.id === this.current?.id),
+      );
+      const wanted = this.bufferCandidates(items, at).slice(0, this.bufferLimit);
+      const wantedIds = new Set(wanted.map((item) => item.videoId));
+      this.activeSource.retain?.([...wantedIds]);
+      for (const id of [...this.bufferedIds])
+        if (id !== this.current?.videoId && !wantedIds.has(id)) {
+          await this.activeSource.remove?.(id).catch(() => {});
+          this.bufferedIds.delete(id);
+          this.preparedMedia.delete(id);
+        }
+      this.bufferedCount = this.bufferedIds.size;
+      this.event("Active download queue updated");
+      this.scheduleRefill(
+        this.activeSource,
+        items,
+        this.controller.signal,
+        at,
+      );
+    };
+    void refresh().finally(() => {
+      this.queueRefreshPending = false;
+    });
+  }
+
   async close() {
     this.closed = true;
     clearInterval(this.resyncTimer);

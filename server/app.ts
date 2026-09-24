@@ -285,6 +285,8 @@ export function createApp(c: Config, store: Store, engine: Engine) {
       parsed.data.sourceMode !== previous.sourceMode ||
       parsed.data.channelUrl !== previous.channelUrl ||
       parsed.data.shuffle !== previous.shuffle ||
+      JSON.stringify(parsed.data.sources) !== JSON.stringify(previous.sources) ||
+      JSON.stringify(parsed.data.filters) !== JSON.stringify(previous.filters) ||
       JSON.stringify(parsed.data.excludedWords) !==
         JSON.stringify(previous.excludedWords)
     ) {
@@ -315,14 +317,15 @@ export function createApp(c: Config, store: Store, engine: Engine) {
     });
   });
   app.put("/api/playlist/order", (req, res) => {
-    if (engine.state !== "stopped" || engine.syncing) {
-      res.status(409).json({ error: "Stop playback and wait for sync before reordering" });
+    if (engine.syncing) {
+      res.status(409).json({ error: "Wait for sync before reordering" });
       return;
     }
     const parsed = z
       .object({
         id: z.string().min(1).max(500),
         to: z.number().int().min(0).max(100000),
+        confirmBufferChange: z.boolean().default(false),
       })
       .strict()
       .safeParse(req.body);
@@ -336,18 +339,48 @@ export function createApp(c: Config, store: Store, engine: Engine) {
       res.status(404).json({ error: "Queue item not found" });
       return;
     }
-    const target = Math.max(0, Math.min(parsed.data.to, preview.length - 1));
-    preview.splice(target, 0, preview.splice(from, 1)[0]);
+    const moving = preview[from];
+    const block = moving.seriesKey
+      ? preview.filter((item) => item.seriesKey === moving.seriesKey)
+      : [moving];
+    const blockIds = new Set(block.map((item) => item.id));
+    const remaining = preview.filter((item) => !blockIds.has(item.id));
+    const target = Math.max(0, Math.min(parsed.data.to, remaining.length));
+    remaining.splice(target, 0, ...block);
     const orderError = store.settings().shuffle
-      ? shuffleOrderError(preview)
+      ? shuffleOrderError(remaining)
       : null;
     if (orderError) {
       res.status(400).json({ error: orderError });
       return;
     }
-    store.move(parsed.data.id, target);
-    engine.event("Queue order updated");
-    res.json({ ok: true });
+    const plan = engine.queueChangePlan(remaining);
+    if (
+      engine.state !== "stopped" &&
+      plan.changesBuffer &&
+      !parsed.data.confirmBufferChange
+    ) {
+      res.status(409).json({
+        error:
+          "Changing this order will replace active buffered downloads. " +
+          plan.removed.length +
+          " cached video(s) may be deleted and " +
+          plan.added.length +
+          " replacement video(s) will download. The stream may show the loading screen if replacements are not ready. Continue?",
+        requiresConfirmation: true,
+        removed: plan.removed,
+        added: plan.added,
+      });
+      return;
+    }
+    store.order(remaining.map((item) => item.id));
+    if (engine.state !== "stopped") engine.queueChanged();
+    engine.event(
+      block.length > 1
+        ? "Series queue order updated"
+        : "Queue order updated",
+    );
+    res.json({ ok: true, moved: block.length });
   });
   app.post("/api/sync", async (_req, res) => {
     await engine.sync();

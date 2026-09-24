@@ -5,6 +5,8 @@ export type StoredItem = PlaylistItem & {
   failures: number;
   retryAt: number;
   error: string | null;
+  seriesKey: string;
+  seriesIndex: number | null;
 };
 export class Store {
   db: DatabaseSync;
@@ -18,18 +20,22 @@ export class Store {
   private migrate() {
     const version = (this.db.prepare("PRAGMA user_version").get() as any)
       .user_version;
-    if (version > 1)
+    if (version > 2)
       throw new Error("Database is newer than this version of IdleCast");
     if (version === 0)
       this.db.exec(`
    BEGIN IMMEDIATE;
    CREATE TABLE kv(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-   CREATE TABLE items(id TEXT PRIMARY KEY,videoId TEXT NOT NULL,position INTEGER NOT NULL,title TEXT NOT NULL,channel TEXT NOT NULL,thumbnail TEXT NOT NULL,available INTEGER NOT NULL,duration REAL,failures INTEGER NOT NULL DEFAULT 0,retryAt INTEGER NOT NULL DEFAULT 0,error TEXT);
+   CREATE TABLE items(id TEXT PRIMARY KEY,videoId TEXT NOT NULL,position INTEGER NOT NULL,title TEXT NOT NULL,channel TEXT NOT NULL,thumbnail TEXT NOT NULL,available INTEGER NOT NULL,duration REAL,failures INTEGER NOT NULL DEFAULT 0,retryAt INTEGER NOT NULL DEFAULT 0,error TEXT,seriesKey TEXT NOT NULL DEFAULT '',seriesIndex INTEGER);
    CREATE INDEX items_order ON items(position,id);
    CREATE TABLE logs(id INTEGER PRIMARY KEY AUTOINCREMENT,time INTEGER NOT NULL,level TEXT NOT NULL,message TEXT NOT NULL);
    CREATE TABLE sessions(hash TEXT PRIMARY KEY,expires INTEGER NOT NULL);
-   PRAGMA user_version=1;
+   PRAGMA user_version=2;
    COMMIT;`);
+    if (version === 1)
+      this.db.exec(
+        "BEGIN IMMEDIATE; ALTER TABLE items ADD COLUMN seriesKey TEXT NOT NULL DEFAULT ''; ALTER TABLE items ADD COLUMN seriesIndex INTEGER; PRAGMA user_version=2; COMMIT;",
+      );
   }
   get<T>(key: string, fallback: T): T {
     const r = this.db
@@ -52,7 +58,12 @@ export class Store {
       this.db
         .prepare("SELECT * FROM items ORDER BY position,id LIMIT ? OFFSET ?")
         .all(limit, offset) as any[]
-    ).map((i) => ({ ...i, available: !!i.available }));
+    ).map((i) => ({
+      ...i,
+      available: !!i.available,
+      seriesKey: i.seriesKey ?? "",
+      seriesIndex: i.seriesIndex ?? null,
+    }));
   }
   all(): StoredItem[] {
     return this.list(0, 100001);
@@ -65,7 +76,7 @@ export class Store {
     try {
       this.db.exec("CREATE TEMP TABLE incoming(id TEXT PRIMARY KEY)");
       const put = this.db.prepare(
-        "INSERT INTO items(id,videoId,position,title,channel,thumbnail,available,duration) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET videoId=excluded.videoId,position=excluded.position,title=excluded.title,channel=excluded.channel,thumbnail=excluded.thumbnail,available=excluded.available,duration=excluded.duration",
+        "INSERT INTO items(id,videoId,position,title,channel,thumbnail,available,duration,seriesKey,seriesIndex) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET videoId=excluded.videoId,position=excluded.position,title=excluded.title,channel=excluded.channel,thumbnail=excluded.thumbnail,available=excluded.available,duration=excluded.duration,seriesKey=excluded.seriesKey,seriesIndex=excluded.seriesIndex",
       );
       const mark = this.db.prepare("INSERT INTO incoming VALUES(?)");
       for (const i of items) {
@@ -78,6 +89,8 @@ export class Store {
           i.thumbnail,
           Number(i.available),
           i.duration,
+          i.seriesKey ?? "",
+          i.seriesIndex ?? null,
         );
         mark.run(i.id);
       }
@@ -108,6 +121,28 @@ export class Store {
       ids.forEach((itemId, position) => update.run(position, itemId));
       this.db.exec("COMMIT");
       return true;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  order(ids: string[]) {
+    const current = (
+      this.db.prepare("SELECT id FROM items ORDER BY position,id").all() as {
+        id: string;
+      }[]
+    ).map((row) => row.id);
+    if (
+      ids.length !== current.length ||
+      new Set(ids).size !== current.length ||
+      current.some((id) => !ids.includes(id))
+    )
+      throw new Error("Queue order must contain every item exactly once");
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const update = this.db.prepare("UPDATE items SET position=? WHERE id=?");
+      ids.forEach((id, position) => update.run(position, id));
+      this.db.exec("COMMIT");
     } catch (error) {
       this.db.exec("ROLLBACK");
       throw error;

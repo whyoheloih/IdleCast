@@ -21,6 +21,8 @@ import {
   Volume2,
   ChevronUp,
   ChevronDown,
+  GripVertical,
+  SlidersHorizontal,
 } from "lucide-react";
 import type { Settings } from "../server/config";
 import type { StoredItem } from "../server/db";
@@ -38,6 +40,10 @@ type Snapshot = {
   lastSync: number;
   desired: boolean;
   excluded: number;
+  filterStats: {
+    reasons: Record<string, number>;
+    detectedSeries: number;
+  };
   download: {
     videoId: string;
     title: string;
@@ -59,7 +65,7 @@ async function api(url: string, method = "GET", body?: unknown) {
       new Error(
         e.error +
           (e.fields
-            ? " · " +
+            ? " Â· " +
               e.fields.map((f: any) => f.field + ": " + f.message).join(", ")
             : ""),
       ),
@@ -99,7 +105,9 @@ function App() {
     [connected, setConnected] = useState(false),
     [dirty, setDirty] = useState(false),
     [loadingItems, setLoadingItems] = useState(false),
-    [overlayEditorOpen, setOverlayEditorOpen] = useState(false);
+    [overlayEditorOpen, setOverlayEditorOpen] = useState(false),
+    [filterOpen, setFilterOpen] = useState(false),
+    [draggedId, setDraggedId] = useState("");
   const scroll = useRef<HTMLDivElement>(null);
   const virtual = useVirtualizer({
     count: items.length,
@@ -205,16 +213,44 @@ function App() {
   }
   async function moveQueueItem(id: string, to: number) {
     await action("reorder", async () => {
-      await api("playlist/order", "PUT", { id, to });
+      try {
+        await api("playlist/order", "PUT", { id, to });
+      } catch (error: any) {
+        if (
+          error.status !== 409 ||
+          !error.message.includes("Continue?") ||
+          !window.confirm(error.message)
+        )
+          throw error;
+        await api("playlist/order", "PUT", {
+          id,
+          to,
+          confirmBufferChange: true,
+        });
+      }
       await loadItems();
-      setNotice("Queue order saved. Syncing again will create a new source order.");
+      setNotice(
+        state?.state === "stopped"
+          ? "Queue order saved."
+          : "Queue order saved. IdleCast is updating the five-video download buffer.",
+      );
+    });
+  }
+  async function saveFilters() {
+    if (!settings) return;
+    await action("filters", async () => {
+      await api("settings", "PUT", settings);
+      await loadSettings();
+      await api("sync", "POST");
+      await loadItems();
+      setNotice("Filters saved and playlist refreshed.");
     });
   }
   if (auth === null)
     return (
       <div className="login">
         <Radio className="spin" />
-        <p>Connecting to IdleCast…</p>
+        <p>Connecting to IdleCastâ€¦</p>
       </div>
     );
   if (!auth)
@@ -355,7 +391,7 @@ function App() {
             <AlertTriangle size={18} />
             {error}
             <button aria-label="Dismiss error" onClick={() => setError("")}>
-              ×
+              Ã—
             </button>
           </div>
         )}
@@ -385,7 +421,7 @@ function App() {
             <div className="stats">
               <Metric
                 label="BROADCAST"
-                value={state?.state ?? "—"}
+                value={state?.state ?? "â€”"}
                 sub={
                   state?.current
                     ? "Playback supervisor active"
@@ -426,7 +462,7 @@ function App() {
                 }
                 sub={
                   state?.syncing
-                    ? "Updating playlist…"
+                    ? "Updating playlistâ€¦"
                     : "Automatic sync every " +
                       (settings?.resyncMinutes ?? 15) +
                       " min"
@@ -453,7 +489,7 @@ function App() {
                 <div className="stage">
                   <div className="stage-grid" />
                   <span className="stage-label">
-                    PLAYOUT STATUS · NO VIDEO PREVIEW
+                    PLAYOUT STATUS Â· NO VIDEO PREVIEW
                   </span>
                   <div className="stage-center">
                     <div className="broadcast-orbit">
@@ -486,7 +522,7 @@ function App() {
                   <span>
                     {state?.current?.duration
                       ? time(state.current.duration)
-                      : "—"}
+                      : "â€”"}
                   </span>
                 </div>
                 {(state?.state === "buffering" || state?.download) && (
@@ -504,7 +540,7 @@ function App() {
                         {state.state === "buffering"
                           ? state.bufferedCount + "/" + state.bufferTarget + " ready"
                           : state.download?.percent === null
-                            ? "Working�"
+                            ? "Working…"
                             : Math.round(state.download?.percent ?? 0) + "%"}
                       </output>
                     </div>
@@ -582,7 +618,7 @@ function App() {
                       <small>
                         {settings?.[name].enabled
                           ? state?.state === "stopped"
-                            ? "Ready · stopped"
+                            ? "Ready Â· stopped"
                             : (state?.outputs[name]?.status ?? "Connecting")
                           : "Not enabled"}
                       </small>
@@ -660,27 +696,43 @@ function App() {
                   Broadcast queue{" "}
                   <span className="count">{state?.count ?? 0}</span>
                 </h2>
-                <p>Use the arrow buttons to set the order · loops continuously</p>
+                <p>Use the arrow buttons to set the order Â· loops continuously</p>
               </div>
-              <button
-                disabled={
-                  !!busy || state?.syncing || dirty || !hasQueueSource(settings)
-                }
-                onClick={() =>
-                  void action("sync", async () => {
-                    await api("sync", "POST");
-                    await loadItems();
-                  })
-                }
-              >
-                <RefreshCw size={16} className={state?.syncing ? "spin" : ""} />
-                {state?.syncing
-                  ? "Syncing…"
-                  : settings?.shuffle
-                    ? "Reshuffle"
-                    : "Sync now"}
-              </button>
+              <div className="heading-actions">
+                <button type="button" onClick={() => setFilterOpen((open) => !open)}>
+                  <SlidersHorizontal size={16} />
+                  Filters
+                  {!!state?.excluded && <b>{state.excluded}</b>}
+                </button>
+                <button
+                  disabled={
+                    !!busy || state?.syncing || dirty || !hasQueueSource(settings)
+                  }
+                  onClick={() =>
+                    void action("sync", async () => {
+                      await api("sync", "POST");
+                      await loadItems();
+                    })
+                  }
+                >
+                  <RefreshCw size={16} className={state?.syncing ? "spin" : ""} />
+                  {state?.syncing
+                    ? "Syncing…"
+                    : settings?.shuffle
+                      ? "Reshuffle"
+                      : "Sync now"}
+                </button>
+              </div>
             </div>
+            {filterOpen && settings && (
+              <FilterPanel
+                settings={settings}
+                stats={state?.filterStats}
+                disabled={!!busy || state?.state !== "stopped" || state?.syncing}
+                onChange={change}
+                onApply={() => void saveFilters()}
+              />
+            )}
             {!items.length ? (
               <Empty busy={loadingItems} onSetup={() => setPage("Settings")} />
             ) : (
@@ -709,9 +761,15 @@ function App() {
                         active={items[v.index].id === state?.current?.id}
                         canMoveUp={v.index > 0}
                         canMoveDown={v.index < items.length - 1}
-                        moveDisabled={
-                          !!busy || state?.state !== "stopped" || state?.syncing
-                        }
+                        moveDisabled={!!busy || state?.syncing}
+                        dragging={draggedId === items[v.index].id}
+                        onDragStart={() => setDraggedId(items[v.index].id)}
+                        onDragEnd={() => setDraggedId("")}
+                        onDrop={() => {
+                          if (draggedId && draggedId !== items[v.index].id)
+                            void moveQueueItem(draggedId, v.index);
+                          setDraggedId("");
+                        }}
                         onMove={(to) =>
                           void moveQueueItem(items[v.index].id, to)
                         }
@@ -738,7 +796,7 @@ function App() {
                 <textarea rows={5} value={settings.sources.map((source) => source.value).join("\n")}
                   onChange={(e) => change({sources: e.target.value.split("\n").map((value) => ({value, kind: (value.includes("list=") || /^[A-Za-z0-9_-]+$/.test(value) && !value.startsWith("UC") ? "playlist" : "channel") as "playlist" | "channel"}))})}
                   onBlur={() => change({sources: settings.sources.filter((source) => source.value.trim())})}
-                  placeholder={"https://www.youtube.com/playlist?list=…\nhttps://www.youtube.com/@channel"} />
+                  placeholder={"https://www.youtube.com/playlist?list=â€¦\nhttps://www.youtube.com/@channel"} />
               </label>
               <p className="hint">When filled in, these sources replace the single source below. Duplicate videos are included once.</p>
               <label>
@@ -770,7 +828,7 @@ function App() {
                   <input
                     value={settings.playlistId}
                     onChange={(e) => change({ playlistId: e.target.value })}
-                    placeholder="https://www.youtube.com/playlist?list=…"
+                    placeholder="https://www.youtube.com/playlist?list=â€¦"
                   />
                 </label>
               )}
@@ -821,9 +879,9 @@ function App() {
                   }
                 >
                   <option value="youtube-experimental">
-                    YouTube — experimental
+                    YouTube â€” experimental
                   </option>
-                  <option value="local">Local files — optional</option>
+                  <option value="local">Local files â€” optional</option>
                 </select>
               </label>
               <p className="hint">
@@ -886,7 +944,7 @@ function App() {
               ))}
               <p className="hint">
                 Save API and stream keys in the Credentials section. Create your
-                broadcast in the destination’s creator dashboard first.
+                broadcast in the destinationâ€™s creator dashboard first.
               </p>
             </section>
             <section className="panel form-panel">
@@ -989,7 +1047,7 @@ function App() {
               <h2>Built for the long run.</h2>
               <div className="quality">
                 <b>
-                  {settings.width} × {settings.height}
+                  {settings.width} Ã— {settings.height}
                 </b>
                 <span>H.264 video / AAC audio</span>
               </div>
@@ -1006,8 +1064,8 @@ function App() {
                     )
                   }
                 >
-                  <option value={720}>1280 × 720 (720p)</option>
-                  <option value={1080}>1920 × 1080 (1080p)</option>
+                  <option value={720}>1280 Ã— 720 (720p)</option>
+                  <option value={1080}>1920 Ã— 1080 (1080p)</option>
                 </select>
               </label>
               <label>
@@ -1061,7 +1119,7 @@ function App() {
                 className="primary"
                 disabled={!!busy || state?.state !== "stopped" || state.syncing}
               >
-                {busy === "save" ? "Saving…" : "Save settings"}
+                {busy === "save" ? "Savingâ€¦" : "Save settings"}
               </button>
               <button
                 type="button"
@@ -1083,7 +1141,7 @@ function App() {
           <section className="panel">
             <div className="panel-heading">
               <h2>Recent events</h2>
-              <span className="hint">Latest 200 · refreshes every 15s</span>
+              <span className="hint">Latest 200 Â· refreshes every 15s</span>
             </div>
             {logs.length ? (
               logs.map((log) => (
@@ -1148,7 +1206,7 @@ function App() {
               </section>
             </>
           ) : (
-            <div className="empty">Checking services…</div>
+            <div className="empty">Checking servicesâ€¦</div>
           ))}
         {settings && (
           <OverlayEditor
@@ -1185,6 +1243,243 @@ function App() {
     </div>
   );
 }
+const durationChoices = [
+  ["under5", "Under 5 min"],
+  ["5to10", "5–10 min"],
+  ["10to25", "10–25 min"],
+  ["25to40", "25–40 min"],
+  ["40to60", "40–60 min"],
+  ["1to2h", "1–2 hours"],
+  ["2to5h", "2–5 hours"],
+  ["5hplus", "5+ hours"],
+] as const;
+
+function FilterPanel({
+  settings,
+  stats,
+  disabled,
+  onChange,
+  onApply,
+}: {
+  settings: Settings;
+  stats?: Snapshot["filterStats"];
+  disabled: boolean;
+  onChange: (patch: Partial<Settings>) => void;
+  onApply: () => void;
+}) {
+  const filters = settings.filters;
+  const update = (patch: Partial<typeof filters>) =>
+    onChange({ filters: { ...filters, ...patch } });
+  const toggle = <T,>(values: T[], value: T) =>
+    values.includes(value)
+      ? values.filter((entry) => entry !== value)
+      : [...values, value];
+  const years = Array.from(
+    { length: new Date().getFullYear() - 2014 },
+    (_, index) => 2015 + index,
+  );
+  return (
+    <div className="filter-panel">
+      <div className="filter-summary">
+        <div>
+          <b>Queue filters</b>
+          <p>
+            {stats
+              ? Object.entries(stats.reasons)
+                  .map(([reason, count]) => count + " " + reason)
+                  .join(" · ") || "No videos excluded"
+              : "Sync to calculate filter results"}
+          </p>
+        </div>
+        <span>{stats?.detectedSeries ?? 0} series detected</span>
+      </div>
+
+      <fieldset>
+        <legend>Upload years</legend>
+        <div className="checkbox-grid years-grid">
+          {years.map((year) => (
+            <label key={year}>
+              <input
+                type="checkbox"
+                checked={filters.years.includes(year)}
+                onChange={() =>
+                  update({ years: toggle(filters.years, year).sort() })
+                }
+              />
+              {year}
+            </label>
+          ))}
+        </div>
+      </fieldset>
+
+      <fieldset>
+        <legend>Video length</legend>
+        <div className="checkbox-grid">
+          {durationChoices.map(([value, label]) => (
+            <label key={value}>
+              <input
+                type="checkbox"
+                checked={filters.durations.includes(value)}
+                onChange={() =>
+                  update({
+                    durations: toggle(filters.durations, value),
+                  })
+                }
+              />
+              {label}
+            </label>
+          ))}
+        </div>
+      </fieldset>
+
+      <div className="filter-columns">
+        <fieldset>
+          <legend>Availability</legend>
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={filters.includeShorts}
+              onChange={(event) =>
+                update({ includeShorts: event.target.checked })
+              }
+            />
+            Include Shorts
+          </label>
+          <p className="hint">Off by default. Uses YouTube Shorts metadata.</p>
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={filters.excludeRegionRestricted}
+              onChange={(event) =>
+                update({ excludeRegionRestricted: event.target.checked })
+              }
+            />
+            Exclude region-restricted videos
+          </label>
+          <p className="hint">
+            This catches partial country blocks, including some music claims.
+            YouTube does not reveal the claim reason.
+          </p>
+          <label className="toggle">
+            <input
+              type="checkbox"
+              checked={filters.excludeNotEmbeddable}
+              onChange={(event) =>
+                update({ excludeNotEmbeddable: event.target.checked })
+              }
+            />
+            Exclude non-embeddable videos
+          </label>
+        </fieldset>
+
+        <fieldset>
+          <legend>Download reliability</legend>
+          <label>
+            Maximum estimated file size (GB)
+            <input
+              type="number"
+              min="0"
+              max="1000"
+              step="0.25"
+              value={filters.maxEstimatedSizeGb}
+              onChange={(event) =>
+                update({
+                  maxEstimatedSizeGb: Number(event.target.value) || 0,
+                })
+              }
+            />
+          </label>
+          <p className="hint">
+            0 disables the limit. The estimate uses duration and selected
+            quality; resolution is never reduced.
+          </p>
+          <label>
+            Exclude after this many failures
+            <input
+              type="number"
+              min="0"
+              max="100"
+              value={filters.maxFailures}
+              onChange={(event) =>
+                update({ maxFailures: Number(event.target.value) || 0 })
+              }
+            />
+          </label>
+          <p className="hint">0 disables failure-history filtering.</p>
+        </fieldset>
+      </div>
+
+      <fieldset>
+        <legend>Series playback</legend>
+        <label>
+          Detection
+          <select
+            value={filters.seriesMode}
+            onChange={(event) =>
+              update({
+                seriesMode: event.target.value as typeof filters.seriesMode,
+              })
+            }
+          >
+            <option value="off">Off</option>
+            <option value="strict">Strict episode markers</option>
+            <option value="smart">Smart title matching</option>
+          </select>
+        </label>
+        <label className="series-limit">
+          Series Continuing limit: <b>{filters.seriesLimit}</b>
+          <input
+            type="range"
+            min="2"
+            max="50"
+            value={filters.seriesLimit}
+            onChange={(event) =>
+              update({ seriesLimit: Number(event.target.value) })
+            }
+          />
+        </label>
+        <p className="hint">
+          Detects Episode, Part, #1, [1], and (1). Smart mode also detects
+          similar titles ending in numbers. The limit includes the triggering
+          episode; normal selection resumes after that many consecutive parts.
+        </p>
+      </fieldset>
+
+      <div className="filter-actions">
+        <button
+          type="button"
+          onClick={() =>
+            update({
+              years: [],
+              durations: [],
+              excludeRegionRestricted: false,
+              excludeNotEmbeddable: false,
+              maxEstimatedSizeGb: 0,
+              maxFailures: 0,
+              seriesMode: "off",
+              seriesLimit: 10,
+              includeShorts: false,
+            })
+          }
+        >
+          Reset all
+        </button>
+        <button
+          type="button"
+          className="primary"
+          disabled={disabled}
+          onClick={onApply}
+        >
+          Save filters & sync
+        </button>
+        {disabled && (
+          <small>Stop playback and wait for sync to change filters.</small>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Metric({
   label,
   value,
@@ -1224,7 +1519,11 @@ function Row({
   canMoveUp = false,
   canMoveDown = false,
   moveDisabled = false,
+  dragging = false,
   onMove,
+  onDragStart,
+  onDragEnd,
+  onDrop,
 }: {
   item: StoredItem;
   index: number;
@@ -1232,13 +1531,37 @@ function Row({
   canMoveUp?: boolean;
   canMoveDown?: boolean;
   moveDisabled?: boolean;
+  dragging?: boolean;
   onMove?: (to: number) => void;
+  onDragStart?: () => void;
+  onDragEnd?: () => void;
+  onDrop?: () => void;
 }) {
   return (
-    <div className={"playlist-row " + (active ? "playing-row" : "")}>
+    <div
+      className={
+        "playlist-row " +
+        (active ? "playing-row " : "") +
+        (dragging ? "dragging-row" : "")
+      }
+      draggable={!!onMove && !moveDisabled}
+      onDragStart={(event) => {
+        event.dataTransfer.effectAllowed = "move";
+        onDragStart?.();
+      }}
+      onDragEnd={onDragEnd}
+      onDragOver={(event) => {
+        if (onDrop) event.preventDefault();
+      }}
+      onDrop={(event) => {
+        event.preventDefault();
+        onDrop?.();
+      }}
+    >
       <span className="row-index">
         {active ? <Volume2 size={17} /> : String(index + 1).padStart(2, "0")}
       </span>
+      {onMove && <GripVertical className="drag-handle" size={17} />}
       {onMove && (
         <div className="row-actions">
           <button
@@ -1268,7 +1591,10 @@ function Row({
       </div>
       <div className="row-title">
         <b>{item.title}</b>
-        <small>{item.channel || "Unavailable channel"}</small>
+        <small>
+          {item.channel || "Unavailable channel"}
+          {item.seriesKey && " · Series " + (item.seriesIndex ?? "")}
+        </small>
       </div>
       <span
         className={!item.available || item.error ? "tag amber" : "row-duration"}
@@ -1279,7 +1605,7 @@ function Row({
             ? "Retry pending"
             : item.duration
               ? time(item.duration)
-              : "—"}
+              : "â€”"}
       </span>
     </div>
   );
@@ -1288,7 +1614,7 @@ function Empty({ busy, onSetup }: { busy: boolean; onSetup: () => void }) {
   return (
     <div className="empty">
       <ListVideo size={32} />
-      <h3>{busy ? "Loading your playlist…" : "A little quiet in here."}</h3>
+      <h3>{busy ? "Loading your playlistâ€¦" : "A little quiet in here."}</h3>
       <p>Connect a YouTube playlist and sync your first queue.</p>
       <button onClick={onSetup}>
         Set up playlist <ArrowUpRight size={15} />

@@ -142,7 +142,6 @@ export function standby(
   const controller = new AbortController();
   const combined = AbortSignal.any([signal, controller.signal]);
   const task = (async () => {
-    await delay(1000, combined);
     while (!combined.aborted) {
       try {
         const loading = loadingFile(c);

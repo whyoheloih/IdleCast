@@ -81,11 +81,21 @@ try {
   });
   await page.getByRole("button", { name: "Playlist", exact: true }).click();
   await page.getByText("Test playlist video 1", { exact: true }).waitFor();
+  await page.getByRole("button", { name: /Filters/ }).click();
+  await page.getByText("Queue filters", { exact: true }).waitFor();
+  assert.equal(
+    await page.getByLabel("Detection").locator('option[value="strict"]').count(),
+    1,
+  );
+  assert.equal(
+    await page.locator(".playlist-row").first().getAttribute("draggable"),
+    "true",
+  );
   await page
     .getByRole("button", { name: "Move Test playlist video 1 down" })
     .click();
   await page
-    .getByText("Queue order saved. Syncing again will create a new source order.")
+    .getByText("Queue order saved.")
     .waitFor();
   assert.deepEqual(
     db.all().slice(0, 2).map((item) => item.title),

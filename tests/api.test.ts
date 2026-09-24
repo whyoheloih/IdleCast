@@ -107,6 +107,49 @@ test("admin authentication, write-origin checks, secret exclusion, validation, a
       400,
     );
     assert.deepEqual(store.all().map((row) => row.id), ["two", "one", "long"]);
+
+    store.set("settings", { ...store.settings(), shuffle: false });
+    store.replace(
+      Array.from({ length: 6 }, (_, index) => ({
+        id: "drag-" + index,
+        videoId: ("dragvideo" + index).padEnd(11, "0").slice(0, 11),
+        position: index,
+        title: "Drag " + index,
+        channel: "",
+        thumbnail: "",
+        available: true,
+        duration: 60,
+      })),
+    );
+    engine.state = "playing";
+    engine.current = store.all()[0];
+    (engine as any).bufferedIds = new Set(
+      store.all().slice(0, 5).map((item) => item.videoId),
+    );
+    const needsConfirmation = await fetch(base + "/api/playlist/order", {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ id: "drag-5", to: 1 }),
+    });
+    assert.equal(needsConfirmation.status, 409);
+    assert.equal((await needsConfirmation.json()).requiresConfirmation, true);
+    assert.equal(
+      (
+        await fetch(base + "/api/playlist/order", {
+          method: "PUT",
+          headers,
+          body: JSON.stringify({
+            id: "drag-5",
+            to: 1,
+            confirmBufferChange: true,
+          }),
+        })
+      ).status,
+      200,
+    );
+    assert.equal(store.all()[1].id, "drag-5");
+    engine.state = "stopped";
+
     assert.equal(
       (await fetch(base + "/api/start", { method: "POST", headers })).status,
       400,

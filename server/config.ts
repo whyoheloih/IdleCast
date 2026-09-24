@@ -132,6 +132,42 @@ const destination = (platform: "youtube" | "twitch") =>
         ),
     })
     .strict();
+export const durationFilterValues = [
+  "under5",
+  "5to10",
+  "10to25",
+  "25to40",
+  "40to60",
+  "1to2h",
+  "2to5h",
+  "5hplus",
+] as const;
+
+const filterSettings = z
+  .object({
+    years: z.array(z.number().int().min(2005).max(2100)).max(100).default([]),
+    durations: z.array(z.enum(durationFilterValues)).max(durationFilterValues.length).default([]),
+    excludeRegionRestricted: z.boolean().default(false),
+    excludeNotEmbeddable: z.boolean().default(false),
+    maxEstimatedSizeGb: z.number().min(0).max(1000).default(0),
+    maxFailures: z.number().int().min(0).max(100).default(0),
+    seriesMode: z.enum(["off", "strict", "smart"]).default("off"),
+    seriesLimit: z.number().int().min(2).max(50).default(10),
+    includeShorts: z.boolean().default(false),
+  })
+  .strict()
+  .default({
+    years: [],
+    durations: [],
+    excludeRegionRestricted: false,
+    excludeNotEmbeddable: false,
+    maxEstimatedSizeGb: 0,
+    maxFailures: 0,
+    seriesMode: "off",
+    seriesLimit: 10,
+    includeShorts: false,
+  });
+
 export const settingsSchema = z
   .object({
     sourceMode: z.enum(["playlist", "channel"]).default("playlist"),
@@ -146,6 +182,7 @@ export const settingsSchema = z
       .transform((words) => words.filter(Boolean))
       .default([]),
     shuffle: z.boolean().default(false),
+    filters: filterSettings,
     playlistId: z
       .string()
       .max(2048)
@@ -201,6 +238,7 @@ export const settingsSchema = z
     { message: "Choose 1280 × 720 or 1920 × 1080", path: ["height"] },
   );
 export type Settings = z.infer<typeof settingsSchema>;
+export type FilterSettings = Settings["filters"];
 export const defaults: Settings = settingsSchema.parse({
   youtube: {},
   twitch: { server: "rtmps://ingest.global-contribute.live-video.net:443/app" },
