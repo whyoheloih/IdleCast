@@ -350,7 +350,7 @@ function App() {
           >
             <LogOut size={16} /> Sign out
           </button>
-          <small>IdleCast v1.1.0</small>
+          <small>IdleCast v1.1.1</small>
         </div>
       </aside>
       <main>

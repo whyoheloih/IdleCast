@@ -1,7 +1,16 @@
 export const updateCommand =
-  "Set-Location 'E:\\IdleCast\\repo'; git pull --ff-only; pnpm install --frozen-lockfile; pnpm build; pnpm start";
+  "Set-Location 'E:\\IdleCast\\repo'; & 'C:\\Users\\ejbot\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\native\\git\\cmd\\git.exe' pull --ff-only; & 'C:\\Users\\ejbot\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\bin\\fallback\\pnpm.cmd' install --frozen-lockfile; & 'C:\\Users\\ejbot\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\bin\\fallback\\pnpm.cmd' build; & 'C:\\Users\\ejbot\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\bin\\fallback\\pnpm.cmd' start";
 
 export const updateHistory = [
+  {
+    version: "1.1.1",
+    date: "Sep 24, 2026",
+    title: "Windows update command compatibility",
+    items: [
+      "Update command now uses the installed Git and pnpm executables directly",
+      "Works from a normal Windows PowerShell window without PATH setup",
+    ],
+  },
   {
     version: "1.1.0",
     date: "Sep 24, 2026",
