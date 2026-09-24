@@ -69,7 +69,7 @@ async function api(url: string, method = "GET", body?: unknown) {
       new Error(
         e.error +
           (e.fields
-            ? " Â· " +
+            ? " · " +
               e.fields.map((f: any) => f.field + ": " + f.message).join(", ")
             : ""),
       ),
@@ -255,7 +255,7 @@ function App() {
     return (
       <div className="login">
         <Radio className="spin" />
-        <p>Connecting to IdleCastâ€¦</p>
+        <p>Connecting to IdleCast…</p>
       </div>
     );
   if (!auth)
@@ -266,7 +266,7 @@ function App() {
             <span className="brand-icon">
               <Radio />
             </span>
-            IdleCast<span className="version">1.0</span>
+            IdleCast<span className="version">1.1.2</span>
           </div>
           <h1>
             Your playlist.
@@ -350,7 +350,7 @@ function App() {
           >
             <LogOut size={16} /> Sign out
           </button>
-          <small>IdleCast v1.1.1</small>
+          <small>IdleCast v1.1.2</small>
         </div>
       </aside>
       <main>
@@ -398,7 +398,7 @@ function App() {
             <AlertTriangle size={18} />
             {error}
             <button aria-label="Dismiss error" onClick={() => setError("")}>
-              Ã—
+              ×
             </button>
           </div>
         )}
@@ -428,7 +428,7 @@ function App() {
             <div className="stats">
               <Metric
                 label="BROADCAST"
-                value={state?.state ?? "â€”"}
+                value={state?.state ?? "—"}
                 sub={
                   state?.current
                     ? "Playback supervisor active"
@@ -469,7 +469,7 @@ function App() {
                 }
                 sub={
                   state?.syncing
-                    ? "Updating playlistâ€¦"
+                    ? "Updating playlist…"
                     : "Automatic sync every " +
                       (settings?.resyncMinutes ?? 15) +
                       " min"
@@ -496,7 +496,7 @@ function App() {
                 <div className="stage">
                   <div className="stage-grid" />
                   <span className="stage-label">
-                    PLAYOUT STATUS Â· NO VIDEO PREVIEW
+                    PLAYOUT STATUS · NO VIDEO PREVIEW
                   </span>
                   <div className="stage-center">
                     <div className="broadcast-orbit">
@@ -529,7 +529,7 @@ function App() {
                   <span>
                     {state?.current?.duration
                       ? time(state.current.duration)
-                      : "â€”"}
+                      : "—"}
                   </span>
                 </div>
                 {(state?.state === "buffering" || state?.download) && (
@@ -625,7 +625,7 @@ function App() {
                       <small>
                         {settings?.[name].enabled
                           ? state?.state === "stopped"
-                            ? "Ready Â· stopped"
+                            ? "Ready · stopped"
                             : (state?.outputs[name]?.status ?? "Connecting")
                           : "Not enabled"}
                       </small>
@@ -703,7 +703,7 @@ function App() {
                   Broadcast queue{" "}
                   <span className="count">{state?.count ?? 0}</span>
                 </h2>
-                <p>Use the arrow buttons to set the order Â· loops continuously</p>
+                <p>Use the arrow buttons to set the order · loops continuously</p>
               </div>
               <div className="heading-actions">
                 <button type="button" onClick={() => setFilterOpen((open) => !open)}>
@@ -803,7 +803,7 @@ function App() {
                 <textarea rows={5} value={settings.sources.map((source) => source.value).join("\n")}
                   onChange={(e) => change({sources: e.target.value.split("\n").map((value) => ({value, kind: (value.includes("list=") || /^[A-Za-z0-9_-]+$/.test(value) && !value.startsWith("UC") ? "playlist" : "channel") as "playlist" | "channel"}))})}
                   onBlur={() => change({sources: settings.sources.filter((source) => source.value.trim())})}
-                  placeholder={"https://www.youtube.com/playlist?list=â€¦\nhttps://www.youtube.com/@channel"} />
+                  placeholder={"https://www.youtube.com/playlist?list=…\nhttps://www.youtube.com/@channel"} />
               </label>
               <p className="hint">When filled in, these sources replace the single source below. Duplicate videos are included once.</p>
               <label>
@@ -835,7 +835,7 @@ function App() {
                   <input
                     value={settings.playlistId}
                     onChange={(e) => change({ playlistId: e.target.value })}
-                    placeholder="https://www.youtube.com/playlist?list=â€¦"
+                    placeholder="https://www.youtube.com/playlist?list=…"
                   />
                 </label>
               )}
@@ -886,9 +886,9 @@ function App() {
                   }
                 >
                   <option value="youtube-experimental">
-                    YouTube â€” experimental
+                    YouTube — experimental
                   </option>
-                  <option value="local">Local files â€” optional</option>
+                  <option value="local">Local files — optional</option>
                 </select>
               </label>
               <p className="hint">
@@ -951,7 +951,7 @@ function App() {
               ))}
               <p className="hint">
                 Save API and stream keys in the Credentials section. Create your
-                broadcast in the destinationâ€™s creator dashboard first.
+                broadcast in the destination’s creator dashboard first.
               </p>
             </section>
             <section className="panel form-panel">
@@ -1054,7 +1054,7 @@ function App() {
               <h2>Built for the long run.</h2>
               <div className="quality">
                 <b>
-                  {settings.width} Ã— {settings.height}
+                  {settings.width} × {settings.height}
                 </b>
                 <span>H.264 video / AAC audio</span>
               </div>
@@ -1071,8 +1071,8 @@ function App() {
                     )
                   }
                 >
-                  <option value={720}>1280 Ã— 720 (720p)</option>
-                  <option value={1080}>1920 Ã— 1080 (1080p)</option>
+                  <option value={720}>1280 × 720 (720p)</option>
+                  <option value={1080}>1920 × 1080 (1080p)</option>
                 </select>
               </label>
               <label>
@@ -1126,7 +1126,7 @@ function App() {
                 className="primary"
                 disabled={!!busy || state?.state !== "stopped" || state.syncing}
               >
-                {busy === "save" ? "Savingâ€¦" : "Save settings"}
+                {busy === "save" ? "Saving…" : "Save settings"}
               </button>
               <button
                 type="button"
@@ -1148,7 +1148,7 @@ function App() {
           <section className="panel">
             <div className="panel-heading">
               <h2>Recent events</h2>
-              <span className="hint">Latest 200 Â· refreshes every 15s</span>
+              <span className="hint">Latest 200 · refreshes every 15s</span>
             </div>
             {logs.length ? (
               logs.map((log) => (
@@ -1265,7 +1265,7 @@ function App() {
               </section>
             </>
           ) : (
-            <div className="empty">Checking servicesâ€¦</div>
+            <div className="empty">Checking services…</div>
           ))}
         {settings && (
           <OverlayEditor
@@ -1664,7 +1664,7 @@ function Row({
             ? "Retry pending"
             : item.duration
               ? time(item.duration)
-              : "â€”"}
+              : "—"}
       </span>
     </div>
   );
@@ -1673,7 +1673,7 @@ function Empty({ busy, onSetup }: { busy: boolean; onSetup: () => void }) {
   return (
     <div className="empty">
       <ListVideo size={32} />
-      <h3>{busy ? "Loading your playlistâ€¦" : "A little quiet in here."}</h3>
+      <h3>{busy ? "Loading your playlist…" : "A little quiet in here."}</h3>
       <p>Connect a YouTube playlist and sync your first queue.</p>
       <button onClick={onSetup}>
         Set up playlist <ArrowUpRight size={15} />

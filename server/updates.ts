@@ -3,6 +3,15 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.1.2",
+    date: "Sep 24, 2026",
+    title: "Text encoding cleanup",
+    items: [
+      "Removed corrupted text sequences from Overview and Settings",
+      "Restored multiplication signs, bullets, dashes, apostrophes, and ellipses",
+    ],
+  },
+  {
     version: "1.1.1",
     date: "Sep 24, 2026",
     title: "Windows update command compatibility",
@@ -40,3 +49,4 @@ export const updateHistory = [
     ],
   },
 ] as const;
+

@@ -37,7 +37,7 @@ const store = new Store(path.join(config.DATA_DIR, "idlecast.db"));
 const engine = new Engine(store, config);
 const { app, closeStreams } = createApp(config, store, engine);
 const server = app.listen(config.PORT, config.HOST, () =>
-  console.log("IdleCast 1.0.0 is ready"),
+  console.log("IdleCast 1.1.2 is ready"),
 );
 let shuttingDown = false;
 async function shutdown() {
