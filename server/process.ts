@@ -83,6 +83,7 @@ export async function runCapture(
   let output = "";
   let checking = false;
   let failureReason = "Media operation timed out";
+  child.stderr?.on("data", (chunk) => onOutput?.(String(chunk)));
   child.stdout?.on("data", (chunk) => {
     const text = String(chunk);
     onOutput?.(text);

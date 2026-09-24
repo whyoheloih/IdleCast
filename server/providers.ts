@@ -20,6 +20,7 @@ export interface PlaylistProvider {
 export type DownloadActivity = {
   videoId: string;
   title: string;
+  thumbnail: string;
   percent: number | null;
 };
 export type MediaSourceHooks = {
@@ -29,6 +30,8 @@ export type MediaSourceHooks = {
 export interface MediaSourceProvider {
   resolve(item: PlaylistItem, signal: AbortSignal): Promise<string>;
   pin?(id: string): void;
+  retain?(ids: string[]): void;
+  remove?(id: string): Promise<void>;
   close?(): Promise<void>;
 }
 export interface StreamOutputProvider {
@@ -203,7 +206,7 @@ export class LocalMediaSource implements MediaSourceProvider {
 export class ExperimentalYouTubeSource implements MediaSourceProvider {
   private lifetime = new AbortController();
   private pending = new Map<string, Promise<string>>();
-  private pinned = "";
+  private retained = new Set<string>();
   private queue: Promise<unknown> = Promise.resolve();
   constructor(
     private c: Config,
@@ -215,10 +218,25 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
     private hooks: MediaSourceHooks = {},
   ) {}
   pin(id: string) {
-    this.pinned = this.cacheName(id);
+    this.retain([id]);
   }
-  resolve(item: PlaylistItem, signal: AbortSignal): Promise<string> {
+  retain(ids: string[]) {
+    this.retained = new Set(ids.map((id) => this.cacheName(id)));
+  }
+  async remove(id: string) {
+    const root = path.join(this.c.DATA_DIR, "cache");
+    await mkdir(root, { recursive: true });
+    const base = this.cacheName(id) + ".";
+    for (const name of await readdir(root))
+      if (name.startsWith(base)) await this.removeCached(root, name);
+  }
+  async resolve(item: PlaylistItem, signal: AbortSignal): Promise<string> {
     signal = AbortSignal.any([signal, this.lifetime.signal]);
+    signal.throwIfAborted();
+    const root = path.join(this.c.DATA_DIR, "cache");
+    await mkdir(root, { recursive: true });
+    const cached = await this.cachedFile(root, item.videoId);
+    if (cached) return cached;
     const existing = this.pending.get(item.videoId);
     if (existing) return withCancellation(existing, signal);
     const task = this.queue
@@ -238,6 +256,13 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
   private cacheName(id: string) {
     return `${id}.${this.quality.height}p${this.quality.fps}`;
   }
+  private async cachedFile(root: string, id: string) {
+    for (const ext of ["mp4", "mkv", "webm"])
+      try {
+        return await containedFile(root, this.cacheName(id) + "." + ext);
+      } catch {}
+    return "";
+  }
   private async removeCached(root: string, name: string) {
     await rm(path.join(root, name), { force: true });
     this.hooks.onDelete?.(name);
@@ -250,27 +275,19 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
     const root = path.join(this.c.DATA_DIR, "cache");
     await mkdir(root, { recursive: true });
     const limit = this.c.CACHE_MAX_MB * 1024 * 1024;
-    // Prune on cache hits too; keep only the playing and requested videos.
-    for (const name of await readdir(root))
-      if (!name.startsWith(this.pinned + ".") && !name.startsWith(this.cacheName(item.videoId) + "."))
-        await this.removeCached(root, name);
-    for (const ext of ["mp4", "mkv", "webm"])
-      try {
-        return await containedFile(
-          root,
-          this.cacheName(item.videoId) + "." + ext,
-        );
-      } catch {}
-    // Keep only the playing file and next download. Each file may consume at most half the cache.
+    const requested = this.cacheName(item.videoId);
     for (const name of await readdir(root))
       if (
-        !name.startsWith(this.pinned + ".") &&
-        !name.startsWith(this.cacheName(item.videoId) + ".")
+        ![...this.retained].some((base) => name.startsWith(base + ".")) &&
+        !name.startsWith(requested + ".")
       )
         await this.removeCached(root, name);
+    const cached = await this.cachedFile(root, item.videoId);
+    if (cached) return cached;
     this.hooks.onDownload?.({
       videoId: item.videoId,
       title: item.title,
+      thumbnail: item.thumbnail,
       percent: 0,
     });
     try {
@@ -288,10 +305,15 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
           "--progress-template",
           "download:%(progress._percent_str)s",
           "--no-cache-dir",
+          "--concurrent-fragments",
+          "4",
+          "--buffer-size",
+          "1M",
+          "--no-resize-buffer",
           "--js-runtimes",
           "node:" + process.execPath,
           "--max-filesize",
-          String(Math.floor(limit / 2)),
+          String(limit),
           "--socket-timeout",
           "20",
           "--retries",
@@ -331,6 +353,7 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
               this.hooks.onDownload?.({
                 videoId: item.videoId,
                 title: item.title,
+                thumbnail: item.thumbnail,
                 percent: Math.max(0, Math.min(100, percent)),
               });
           }
@@ -339,6 +362,7 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
       this.hooks.onDownload?.({
         videoId: item.videoId,
         title: item.title,
+        thumbnail: item.thumbnail,
         percent: 100,
       });
     } catch (e) {
@@ -348,26 +372,16 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
           await this.removeCached(root, name);
       throw e;
     }
-    for (const ext of ["mp4", "mkv", "webm"]) {
-      let file: string;
-      try {
-        file = await containedFile(
-          root,
-          this.cacheName(item.videoId) + "." + ext,
-        );
-      } catch {
-        continue;
-      }
-      if ((await stat(file)).size > limit / 2) {
-        await rm(file);
-        this.hooks.onDelete?.(path.basename(file));
-        throw new Error("Media exceeds per-item cache limit");
-      }
-      return file;
+    const file = await this.cachedFile(root, item.videoId);
+    if (!file)
+      throw new Error(
+        "Download produced no merged media; check FFmpeg location and cache limit",
+      );
+    if ((await stat(file)).size > limit) {
+      await this.removeCached(root, path.basename(file));
+      throw new Error("Media exceeds the cache limit");
     }
-    throw new Error(
-      "Download produced no merged media; check FFmpeg location and per-video cache limit",
-    );
+    return file;
   }
 }
 export class RtmpOutput implements StreamOutputProvider {
@@ -388,7 +402,9 @@ export class RtmpOutput implements StreamOutputProvider {
       "-thread_queue_size",
       "8192",
       "-i",
-      "udp://127.0.0.1:" + port + "?buffer_size=4194304&fifo_size=262144&overrun_nonfatal=1",
+      "udp://127.0.0.1:" +
+        port +
+        "?buffer_size=4194304&fifo_size=262144&overrun_nonfatal=1",
       "-map",
       "0:v:0",
       "-map",

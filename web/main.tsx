@@ -38,7 +38,14 @@ type Snapshot = {
   lastSync: number;
   desired: boolean;
   excluded: number;
-  download: { videoId: string; title: string; percent: number | null } | null;
+  download: {
+    videoId: string;
+    title: string;
+    thumbnail: string;
+    percent: number | null;
+  } | null;
+  bufferedCount: number;
+  bufferTarget: number;
 };
 async function api(url: string, method = "GET", body?: unknown) {
   const r = await fetch("/api/" + url, {
@@ -482,27 +489,42 @@ function App() {
                       : "—"}
                   </span>
                 </div>
-                {state?.download && (
+                {(state?.state === "buffering" || state?.download) && (
                   <div className="download-progress">
                     <div>
                       <span>
-                        {state.download.percent === 100
-                          ? "Downloaded"
-                          : "Downloading"}
+                        {state.state === "buffering"
+                          ? "Preparing stream"
+                          : state.download?.percent === 100
+                            ? "Downloaded"
+                            : "Downloading"}
                       </span>
-                      <b>{state.download.title}</b>
+                      <b>{state.download?.title ?? "Building the startup video buffer"}</b>
                       <output>
-                        {state.download.percent === null
-                          ? "Working…"
-                          : Math.round(state.download.percent) + "%"}
+                        {state.state === "buffering"
+                          ? state.bufferedCount + "/" + state.bufferTarget + " ready"
+                          : state.download?.percent === null
+                            ? "Working�"
+                            : Math.round(state.download?.percent ?? 0) + "%"}
                       </output>
                     </div>
                     <progress
                       max={100}
-                      {...(state.download.percent === null
-                        ? {}
-                        : { value: state.download.percent })}
+                      value={
+                        state.state === "buffering"
+                          ? Math.min(
+                              100,
+                              ((state.bufferedCount +
+                                (state.download?.percent ?? 0) / 100) /
+                                Math.max(1, state.bufferTarget)) *
+                                100,
+                            )
+                          : state.download?.percent ?? 0
+                      }
                     />
+                    {state.state === "buffering" && (
+                      <small>The livestream starts automatically when the buffer is ready.</small>
+                    )}
                   </div>
                 )}
                 <div className="controls">

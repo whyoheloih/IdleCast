@@ -176,9 +176,12 @@ test("real FFmpeg loop skips unavailable files, survives one failed output, and 
     duration: 3,
   });
   db.replace([
-    make("missing", "missing", 0),
-    make("first", "abcdefghijk", 1),
-    make("second", "abcdefghijk", 2),
+    make("missing", "missing00000", 0),
+    make("first", "video000001", 1),
+    make("second", "video000002", 2),
+    make("third", "video000003", 3),
+    make("fourth", "video000004", 4),
+    make("fifth", "video000005", 5),
   ]);
   const good: StreamOutputProvider = {
     name: "youtube",
@@ -215,7 +218,8 @@ test("real FFmpeg loop skips unavailable files, survives one failed output, and 
           delayed = true;
           await delay(2200, s);
         }
-        return local.resolve(i, s);
+        if (i.id === "missing") return local.resolve(i, s);
+        return file;
       },
     },
   });
@@ -256,8 +260,10 @@ test("real FFmpeg loop skips unavailable files, survives one failed output, and 
     }
     const logs = db.logs() as any[];
     assert.ok(
-      logs.some((l) => l.message.startsWith("Media failed: missing")),
-      "missing media should be skipped",
+      logs.some((l) =>
+        l.message.startsWith("Media failed while buffering: missing"),
+      ),
+      "missing media should be skipped while filling the startup buffer",
     );
     assert.ok(
       logs.filter((l) => l.message.startsWith("Finished:")).length >= 3,
@@ -270,7 +276,7 @@ test("real FFmpeg loop skips unavailable files, survives one failed output, and 
     await engine.stop(true);
     assert.match(
       await readFile(path.join(root, "overlay", "title.txt"), "utf8"),
-      /^(first|second)$/,
+      /^(first|second|third|fourth|fifth)$/,
     );
     assert.equal(db.get("desired", false), true);
     assert.equal(engine.state, "stopped");
