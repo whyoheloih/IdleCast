@@ -3,6 +3,16 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.1.5",
+    date: "Sep 24, 2026",
+    title: "Clear playlist drag and drop",
+    items: [
+      "Playlist rows now show the exact before-or-after insertion point",
+      "A translucent ghost label previews the video being moved",
+      "Drop targets highlight while preserving arrow controls and confirmations",
+    ],
+  },
+  {
     version: "1.1.4",
     date: "Sep 24, 2026",
     title: "Reliability and code audit",

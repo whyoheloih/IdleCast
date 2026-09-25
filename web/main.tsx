@@ -113,7 +113,11 @@ function App() {
     [loadingItems, setLoadingItems] = useState(false),
     [overlayEditorOpen, setOverlayEditorOpen] = useState(false),
     [filterOpen, setFilterOpen] = useState(false),
-    [draggedId, setDraggedId] = useState("");
+    [draggedId, setDraggedId] = useState(""),
+    [dropTarget, setDropTarget] = useState<{
+      index: number;
+      edge: "before" | "after";
+    } | null>(null);
   const scroll = useRef<HTMLDivElement>(null);
   const virtual = useVirtualizer({
     count: items.length,
@@ -252,6 +256,7 @@ function App() {
       setNotice("Filters saved and playlist refreshed.");
     });
   }
+  const draggedTitle = items.find((item) => item.id === draggedId)?.title;
   if (auth === null)
     return (
       <div className="login">
@@ -704,7 +709,7 @@ function App() {
                   Broadcast queue{" "}
                   <span className="count">{state?.count ?? 0}</span>
                 </h2>
-                <p>Use the arrow buttons to set the order · loops continuously</p>
+                <p>Drag a video to the highlighted drop marker, or use the arrow buttons · loops continuously</p>
               </div>
               <div className="heading-actions">
                 <button type="button" onClick={() => setFilterOpen((open) => !open)}>
@@ -760,6 +765,7 @@ function App() {
                         left: 0,
                         width: "100%",
                         height: v.size,
+                        zIndex: dropTarget?.index === v.index ? 2 : 1,
                         transform: "translateY(" + v.start + "px)",
                       }}
                     >
@@ -771,12 +777,50 @@ function App() {
                         canMoveDown={v.index < items.length - 1}
                         moveDisabled={!!busy || state?.syncing}
                         dragging={draggedId === items[v.index].id}
-                        onDragStart={() => setDraggedId(items[v.index].id)}
-                        onDragEnd={() => setDraggedId("")}
-                        onDrop={() => {
-                          if (draggedId && draggedId !== items[v.index].id)
-                            void moveQueueItem(draggedId, v.index);
+                        dropEdge={
+                          dropTarget?.index === v.index
+                            ? dropTarget.edge
+                            : undefined
+                        }
+                        dropTitle={draggedTitle}
+                        onDragStart={() => {
+                          setDraggedId(items[v.index].id);
+                          setDropTarget(null);
+                        }}
+                        onDragEnd={() => {
                           setDraggedId("");
+                          setDropTarget(null);
+                        }}
+                        onDragOver={(edge) =>
+                          setDropTarget((current) =>
+                            current?.index === v.index && current.edge === edge
+                              ? current
+                              : { index: v.index, edge },
+                          )
+                        }
+                        onDrop={(edge) => {
+                          const from = items.findIndex(
+                            (item) => item.id === draggedId,
+                          );
+                          const moving = items[from];
+                          const boundary = v.index + (edge === "after" ? 1 : 0);
+                          if (moving) {
+                            const belongsToMovingBlock = (item: StoredItem) =>
+                              moving.seriesKey
+                                ? item.seriesKey === moving.seriesKey
+                                : item.id === moving.id;
+                            const removedBefore = items
+                              .slice(0, boundary)
+                              .filter(belongsToMovingBlock).length;
+                            const to = boundary - removedBefore;
+                            const currentBlockStart = items.findIndex(
+                              belongsToMovingBlock,
+                            );
+                            if (to !== currentBlockStart)
+                              void moveQueueItem(draggedId, to);
+                          }
+                          setDraggedId("");
+                          setDropTarget(null);
                         }}
                         onMove={(to) =>
                           void moveQueueItem(items[v.index].id, to)
@@ -1580,9 +1624,12 @@ function Row({
   canMoveDown = false,
   moveDisabled = false,
   dragging = false,
+  dropEdge,
+  dropTitle,
   onMove,
   onDragStart,
   onDragEnd,
+  onDragOver,
   onDrop,
 }: {
   item: StoredItem;
@@ -1592,32 +1639,52 @@ function Row({
   canMoveDown?: boolean;
   moveDisabled?: boolean;
   dragging?: boolean;
+  dropEdge?: "before" | "after";
+  dropTitle?: string;
   onMove?: (to: number) => void;
   onDragStart?: () => void;
   onDragEnd?: () => void;
-  onDrop?: () => void;
+  onDragOver?: (edge: "before" | "after") => void;
+  onDrop?: (edge: "before" | "after") => void;
 }) {
   return (
     <div
       className={
         "playlist-row " +
         (active ? "playing-row " : "") +
-        (dragging ? "dragging-row" : "")
+        (dragging ? "dragging-row " : "") +
+        (dropEdge ? "drop-target" : "")
       }
       draggable={!!onMove && !moveDisabled}
       onDragStart={(event) => {
         event.dataTransfer.effectAllowed = "move";
+        event.dataTransfer.setData("text/plain", item.id);
         onDragStart?.();
       }}
       onDragEnd={onDragEnd}
       onDragOver={(event) => {
-        if (onDrop) event.preventDefault();
+        if (!onDrop) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "move";
+        const bounds = event.currentTarget.getBoundingClientRect();
+        onDragOver?.(
+          event.clientY < bounds.top + bounds.height / 2 ? "before" : "after",
+        );
       }}
       onDrop={(event) => {
         event.preventDefault();
-        onDrop?.();
+        const bounds = event.currentTarget.getBoundingClientRect();
+        onDrop?.(
+          event.clientY < bounds.top + bounds.height / 2 ? "before" : "after",
+        );
       }}
     >
+      {dropEdge && dropTitle && (
+        <div className={"drop-ghost " + dropEdge} aria-hidden="true">
+          <span>DROP HERE</span>
+          <b>{dropTitle}</b>
+        </div>
+      )}
       <span className="row-index">
         {active ? <Volume2 size={17} /> : String(index + 1).padStart(2, "0")}
       </span>

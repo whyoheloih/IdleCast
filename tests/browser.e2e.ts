@@ -91,6 +91,31 @@ try {
     await page.locator(".playlist-row").first().getAttribute("draggable"),
     "true",
   );
+  await page.locator(".playlist-row").evaluateAll((rows) => {
+    const transfer = new DataTransfer();
+    const first = rows[0] as HTMLElement;
+    const second = rows[1] as HTMLElement;
+    first.dispatchEvent(
+      new DragEvent("dragstart", { bubbles: true, dataTransfer: transfer }),
+    );
+    const bounds = second.getBoundingClientRect();
+    second.dispatchEvent(
+      new DragEvent("dragover", {
+        bubbles: true,
+        cancelable: true,
+        clientY: bounds.bottom - 2,
+        dataTransfer: transfer,
+      }),
+    );
+  });
+  await page.getByText("DROP HERE", { exact: true }).waitFor();
+  assert.match(
+    await page.locator(".drop-ghost").innerText(),
+    /Test playlist video 1/,
+  );
+  assert.ok(await page.locator(".drop-ghost.after").isVisible());
+  await page.locator(".playlist-row").first().dispatchEvent("dragend");
+  assert.equal(await page.locator(".drop-ghost").count(), 0);
   await page
     .getByRole("button", { name: "Move Test playlist video 1 down" })
     .click();
