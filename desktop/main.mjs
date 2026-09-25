@@ -436,7 +436,8 @@ function configureAutoUpdater() {
         void installDownloadedUpdate();
       });
   });
-  setTimeout(() => void checkForUpdates(), 10000).unref();
+  // Check every time the installed app launches, as soon as the window and tray are ready.
+  void checkForUpdates();
   setInterval(() => void checkForUpdates(), UPDATE_INTERVAL_MS).unref();
 }
 

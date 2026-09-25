@@ -3,6 +3,16 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.3.1",
+    date: "Sep 25, 2026",
+    title: "Update check on every launch",
+    items: [
+      "The installed desktop app checks GitHub Releases immediately whenever IdleCast launches",
+      "Available releases continue downloading automatically in the background",
+      "Six-hour background checks and the manual tray update check remain available",
+    ],
+  },
+  {
     version: "1.3.0",
     date: "Sep 25, 2026",
     title: "Reliable downloads, live sources, and managed queue",
