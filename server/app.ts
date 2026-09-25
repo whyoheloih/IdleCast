@@ -423,7 +423,7 @@ export function createApp(c: Config, store: Store, engine: Engine) {
     );
     const disk = await statfs(c.DATA_DIR);
     const value = {
-      version: "1.1.2",
+      version: "1.1.3",
       uptime: Math.floor(process.uptime()),
       memoryMB: Math.round(process.memoryUsage().rss / 1048576),
       freeDiskMB: Math.round((disk.bavail * disk.bsize) / 1048576),

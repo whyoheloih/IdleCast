@@ -449,9 +449,16 @@ export class Engine extends EventEmitter {
             Date.now() - lastTransportWarning > 15000
           ) {
             lastTransportWarning = Date.now();
+            const diagnostic = String(chunk);
+            const reason = /non-monoton|timestamp/i.test(diagnostic)
+              ? "timestamp discontinuity"
+              : /overrun|circular buffer/i.test(diagnostic)
+                ? "UDP buffer overrun"
+                : /drop/i.test(diagnostic)
+                  ? "dropped packet/frame"
+                  : "transport interruption";
             this.event(
-              name +
-                " transport buffering warning; check network stability and encoder load",
+              `${name} transport warning: ${reason}; output recovery is monitoring the connection`,
               "warn",
             );
           }
@@ -486,9 +493,24 @@ export class Engine extends EventEmitter {
           clearInterval(watchdog);
         }
         if (signal.aborted) break;
-        if (code !== 0)
-          throw new Error(`${name} FFmpeg exited with code ${code}: ${mediaFailure(child)}`);
+        // A worker that stayed healthy for a minute is not part of the prior
+        // failure streak. Reset before handling its eventual disconnect so a
+        // normal transition/socket reset reconnects after one second instead
+        // of inheriting an old maximum backoff forever.
         if (Date.now() - started > 60000) attempt = 0;
+        if (code !== 0) {
+          const signedCode =
+            process.platform === "win32" && code > 0x7fffffff
+              ? code - 0x100000000
+              : code;
+          throw new Error(
+            `${name} FFmpeg exited with code ${signedCode}: ${
+              signedCode === -10053
+                ? "RTMP socket was aborted during the source transition"
+                : mediaFailure(child)
+            }`,
+          );
+        }
       } catch (error) {
         if (signal.aborted) break;
         this.event(

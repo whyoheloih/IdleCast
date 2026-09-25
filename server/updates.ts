@@ -3,6 +3,16 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.1.3",
+    date: "Sep 24, 2026",
+    title: "Fast livestream transition recovery",
+    items: [
+      "Healthy RTMP sessions now reset old failure streaks before reconnecting",
+      "Transition socket failures retry after one second instead of thirty",
+      "Windows socket error 10053 and transport warnings now have clear diagnostics",
+    ],
+  },
+  {
     version: "1.1.2",
     date: "Sep 24, 2026",
     title: "Text encoding cleanup",

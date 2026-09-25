@@ -266,7 +266,7 @@ function App() {
             <span className="brand-icon">
               <Radio />
             </span>
-            IdleCast<span className="version">1.1.2</span>
+            IdleCast<span className="version">1.1.3</span>
           </div>
           <h1>
             Your playlist.
@@ -350,7 +350,7 @@ function App() {
           >
             <LogOut size={16} /> Sign out
           </button>
-          <small>IdleCast v1.1.2</small>
+          <small>IdleCast v1.1.3</small>
         </div>
       </aside>
       <main>
