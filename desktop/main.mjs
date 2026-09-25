@@ -45,8 +45,12 @@ function logShell(message, error) {
     );
   } catch {}
 }
-process.on("uncaughtException", (error) => logShell("Uncaught exception", error));
-process.on("unhandledRejection", (error) => logShell("Unhandled rejection", error));
+process.on("uncaughtException", (error) =>
+  logShell("Uncaught exception", error),
+);
+process.on("unhandledRejection", (error) =>
+  logShell("Unhandled rejection", error),
+);
 logShell("Desktop shell launched");
 
 function packagedResource(...parts) {
@@ -57,7 +61,10 @@ function findLegacyRuntime() {
   const requested = process.env.IDLECAST_HOME;
   if (requested && existsSync(path.join(requested, ".env"))) return requested;
   const eDriveRuntime = "E:\\IdleCast\\repo";
-  if (process.platform === "win32" && existsSync(path.join(eDriveRuntime, ".env")))
+  if (
+    process.platform === "win32" &&
+    existsSync(path.join(eDriveRuntime, ".env"))
+  )
     return eDriveRuntime;
   if (!app.isPackaged && existsSync(path.join(PROJECT_ROOT, ".env")))
     return PROJECT_ROOT;
@@ -162,7 +169,7 @@ async function startBackend() {
   const output = openSync(path.join(logs, "desktop-server.log"), "a");
   const errors = openSync(path.join(logs, "desktop-server-error.log"), "a");
   const entry = app.isPackaged
-    ? packagedResource("server", "index.mjs")
+    ? packagedResource("server", "index.cjs")
     : path.join(PROJECT_ROOT, "server", "index.ts");
   const args = app.isPackaged ? [entry] : ["--import", "tsx", entry];
   const child = spawn(process.execPath, args, {
@@ -182,7 +189,9 @@ async function startBackend() {
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
   const detail = existsSync(path.join(logs, "desktop-server-error.log"))
-    ? readFileSync(path.join(logs, "desktop-server-error.log"), "utf8").slice(-1500)
+    ? readFileSync(path.join(logs, "desktop-server-error.log"), "utf8").slice(
+        -1500,
+      )
     : "No server error log was created.";
   throw new Error(`IdleCast did not start.\n\n${detail}`);
 }
@@ -235,7 +244,10 @@ function refreshTrayMenu() {
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: "Open IdleCast", click: showWindow },
-      { label: "Open localhost dashboard", click: () => void shell.openExternal(ORIGIN) },
+      {
+        label: "Open localhost dashboard",
+        click: () => void shell.openExternal(ORIGIN),
+      },
       { type: "separator" },
       {
         label: "Launch with Windows",
@@ -243,7 +255,10 @@ function refreshTrayMenu() {
         checked: launchAtLogin,
         enabled: app.isPackaged,
         click: (item) => {
-          app.setLoginItemSettings({ openAtLogin: item.checked, path: process.execPath });
+          app.setLoginItemSettings({
+            openAtLogin: item.checked,
+            path: process.execPath,
+          });
           refreshTrayMenu();
         },
       },

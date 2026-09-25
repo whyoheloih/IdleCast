@@ -13,7 +13,7 @@
     "test": "tsx --test tests/*.test.ts",
     "check": "tsc --noEmit",
     "test:browser": "tsx tests/browser.e2e.ts",
-    "build:server": "esbuild server/index.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist-server/index.mjs",
+    "build:server": "esbuild server/index.ts --bundle --platform=node --format=cjs --target=node22 --outfile=dist-server/index.cjs",
     "desktop:dev": "pnpm build && electron .",
     "desktop:dist": "pnpm build && pnpm build:server && node scripts/prepare-desktop.mjs && node scripts/build-desktop.mjs"
   },
@@ -65,8 +65,8 @@
         "to": "idlecast/media/loading-cat.gif"
       },
       {
-        "from": "dist-server/index.mjs",
-        "to": "server/index.mjs"
+        "from": "dist-server/index.cjs",
+        "to": "server/index.cjs"
       },
       {
         "from": "desktop-resources/tools",
