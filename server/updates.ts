@@ -3,6 +3,18 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.3.0",
+    date: "Sep 25, 2026",
+    title: "Reliable downloads, live sources, and managed queue",
+    items: [
+      "Stalled downloads are detected by real byte/progress movement, retried three times, cleaned up, and skipped without freezing startup",
+      "Downloaded Videos page shows current and prepared media, progress, retry/failure state, file size, total storage, and real queue ordering",
+      "Final bracketed episode numbers and DAY ONE-style titles now form correctly ordered, limited series continuations",
+      "Optional currently-live YouTube playback uses a direct reconnecting stream path without consuming finite download slots",
+      "Upcoming livestreams stay excluded and Play Livestreams remains off by default",
+    ],
+  },
+  {
     version: "1.2.3",
     date: "Sep 25, 2026",
     title: "E-drive update storage",

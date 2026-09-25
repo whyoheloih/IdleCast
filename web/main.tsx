@@ -26,6 +26,8 @@ import {
   ClipboardList,
   Copy,
   Terminal,
+  Download,
+  Database,
 } from "lucide-react";
 import type { Settings } from "../server/config";
 import { APP_VERSION } from "../server/version";
@@ -57,6 +59,25 @@ type Snapshot = {
   } | null;
   bufferedCount: number;
   bufferTarget: number;
+  downloadQueue: {
+    totalBytes: number;
+    active: Snapshot["download"];
+    entries: Array<{
+      id: string;
+      videoId: string;
+      position: number;
+      title: string;
+      thumbnail: string;
+      seriesKey: string;
+      seriesIndex: number | null;
+      current: boolean;
+      status: string;
+      percent: number | null;
+      attempt: number;
+      bytes: number;
+      error?: string | null;
+    }>;
+  };
 };
 async function api(url: string, method = "GET", body?: unknown) {
   const r = await fetch("/api/" + url, {
@@ -90,6 +111,7 @@ const hasQueueSource = (settings: Settings | null) =>
 const nav = [
   ["Overview", LayoutDashboard],
   ["Playlist", ListVideo],
+  ["Downloaded Videos", Download],
   ["Settings", Settings2],
   ["Logs", ScrollText],
   ["Updates", ClipboardList],
@@ -371,6 +393,8 @@ function App() {
                 ? "One playlist. A station that keeps going."
                 : page === "Playlist"
                   ? "Your YouTube order, automatically kept in sync."
+                  : page === "Downloaded Videos"
+                    ? "See and arrange the files prepared for playback."
                   : page === "Settings"
                     ? "Make this station your own."
                     : page === "Logs"
@@ -829,6 +853,79 @@ function App() {
                     </div>
                   ))}
                 </div>
+              </div>
+            )}
+          </section>
+        )}
+        {page === "Downloaded Videos" && (
+          <section className="panel download-queue-panel">
+            <div className="panel-heading">
+              <div>
+                <h2><Database size={18} /> Managed playback files</h2>
+                <p>
+                  Current and upcoming media on disk · {(state?.downloadQueue.totalBytes ?? 0) < 1073741824
+                    ? ((state?.downloadQueue.totalBytes ?? 0) / 1048576).toFixed(1) + " MB"
+                    : ((state?.downloadQueue.totalBytes ?? 0) / 1073741824).toFixed(2) + " GB"} total
+                </p>
+              </div>
+              <span className="count">{state?.downloadQueue.entries.length ?? 0}</span>
+            </div>
+            <div className="download-queue-help">
+              Drag an upcoming video onto a highlighted position to change the real playback and download order.
+              The current video stays active. Series move together in ascending episode order.
+            </div>
+            {state?.downloadQueue.entries.length ? (
+              <div className="download-queue-list">
+                {state.downloadQueue.entries.map((entry) => (
+                  <div
+                    className={"download-queue-row " + (entry.current ? "playing-row" : "")}
+                    key={entry.id}
+                    draggable={!entry.current && !busy && !state.syncing}
+                    onDragStart={() => setDraggedId(entry.id)}
+                    onDragEnd={() => { setDraggedId(""); setDropTarget(null); }}
+                    onDragOver={(event) => {
+                      if (!draggedId || entry.current) return;
+                      event.preventDefault();
+                      setDropTarget({ index: entry.position, edge: "before" });
+                    }}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      if (draggedId && !entry.current && draggedId !== entry.id)
+                        void moveQueueItem(draggedId, entry.position);
+                      setDraggedId("");
+                      setDropTarget(null);
+                    }}
+                  >
+                    {dropTarget?.index === entry.position && draggedId && (
+                      <div className="queue-drop-ghost">Drop here</div>
+                    )}
+                    <GripVertical size={18} className="queue-grip" />
+                    <div className="thumb">
+                      {entry.thumbnail ? <img src={entry.thumbnail} alt="" /> : <Download size={18} />}
+                    </div>
+                    <div className="row-title">
+                      <b>{entry.title}</b>
+                      <small>
+                        {entry.current ? "Current video · " : ""}
+                        {entry.seriesKey && entry.seriesIndex !== null ? "Series " + entry.seriesIndex + " · " : ""}
+                        {entry.bytes ? (entry.bytes / 1048576).toFixed(1) + " MB" : "Size pending"}
+                      </small>
+                      {(entry.status === "downloading" || entry.status === "retrying" || entry.status === "queued") && (
+                        <progress max={100} value={entry.percent ?? 0} />
+                      )}
+                    </div>
+                    <span className={"queue-status status-" + entry.status.toLocaleLowerCase()}>
+                      {entry.status === "LIVE" ? "LIVE" : entry.status}
+                      {entry.attempt > 1 ? " · attempt " + entry.attempt : ""}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="empty">
+                <Download size={28} />
+                <h3>No managed downloads yet.</h3>
+                <p>Start or prepare playback to fill the five-video buffer.</p>
               </div>
             )}
           </section>
@@ -1442,6 +1539,19 @@ function FilterPanel({
           <label className="toggle">
             <input
               type="checkbox"
+              checked={filters.playLivestreams}
+              onChange={(event) =>
+                update({ playLivestreams: event.target.checked })
+              }
+            />
+            Play Livestreams
+          </label>
+          <p className="hint">
+            Off by default. Currently-live broadcasts play directly and do not use a download slot. Upcoming streams stay excluded.
+          </p>
+          <label className="toggle">
+            <input
+              type="checkbox"
               checked={filters.includeShorts}
               onChange={(event) =>
                 update({ includeShorts: event.target.checked })
@@ -1563,6 +1673,7 @@ function FilterPanel({
               seriesMode: "off",
               seriesLimit: 10,
               includeShorts: false,
+              playLivestreams: false,
             })
           }
         >

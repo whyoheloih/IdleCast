@@ -86,14 +86,55 @@ export function shuffleOrderError(items: PlaylistItem[]) {
 
 type SeriesMatch = { key: string; index: number };
 
+const numberWords: Record<string, number> = {
+  zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7,
+  eight: 8, nine: 9, ten: 10, eleven: 11, twelve: 12, thirteen: 13,
+  fourteen: 14, fifteen: 15, sixteen: 16, seventeen: 17, eighteen: 18,
+  nineteen: 19, twenty: 20, thirty: 30, forty: 40, fifty: 50, sixty: 60,
+  seventy: 70, eighty: 80, ninety: 90,
+};
+function wordsToNumber(value: string): number | null {
+  if (/^\d{1,4}$/.test(value.trim())) return Number(value.trim());
+  let total = 0, current = 0, found = false;
+  for (const word of value.toLocaleLowerCase().split(/[\s-]+/)) {
+    if (word === "and") continue;
+    if (word in numberWords) { current += numberWords[word]; found = true; continue; }
+    if (word === "hundred") { current = Math.max(1, current) * 100; found = true; continue; }
+    if (word === "thousand") { total += Math.max(1, current) * 1000; current = 0; found = true; continue; }
+    return null;
+  }
+  const result = total + current;
+  return found && result >= 0 && result <= 9999 ? result : null;
+}
+function seriesKey(value: string) {
+  return value.toLocaleLowerCase().replace(/\b(?:episode|ep|part|pt)\.?\b/gi, " ")
+    .replace(/[^a-z0-9]+/g, " ").trim();
+}
 export function detectSeries(
   title: string,
   mode: Settings["filters"]["seriesMode"],
 ): SeriesMatch | null {
   if (mode === "off") return null;
+
+  // A final [number] is authoritative. For "episode title | series [7]",
+  // the stable series name is the final pipe segment, not the varying title.
+  const bracket = title.match(/\[(\d{1,4})\]\s*$/);
+  if (bracket && bracket.index !== undefined) {
+    const before = title.slice(0, bracket.index);
+    const pipe = before.lastIndexOf("|");
+    const key = seriesKey(pipe >= 0 ? before.slice(pipe + 1) : before);
+    if (key.length >= 3) return { key, index: Number(bracket[1]) };
+  }
+
+  const day = title.match(/\bday\s+([a-z][a-z\s-]*|\d{1,4})\s*$/i);
+  if (day && day.index !== undefined) {
+    const index = wordsToNumber(day[1]);
+    const key = seriesKey(title.slice(0, day.index));
+    if (index !== null && key.length >= 3) return { key, index };
+  }
+
   const patterns = [
-    /\[(\d{1,4})\]/,
-    /\((\d{1,4})\)/,
+    /\((\d{1,4})\)\s*$/,
     /\b(?:episode|ep|part|pt)\.?\s*[-:#]?\s*(\d{1,4})\b/i,
     /#(\d{1,4})\b/,
   ];
@@ -103,15 +144,7 @@ export function detectSeries(
     if (!match || match.index === undefined) continue;
     const index = Number(match[1]);
     if (!Number.isInteger(index)) continue;
-    const key = (
-      title.slice(0, match.index) +
-      " " +
-      title.slice(match.index + match[0].length)
-    )
-      .toLocaleLowerCase()
-      .replace(/\b(?:episode|ep|part|pt)\.?\b/gi, " ")
-      .replace(/[^a-z0-9]+/g, " ")
-      .trim();
+    const key = seriesKey(title.slice(0, match.index) + " " + title.slice(match.index + match[0].length));
     if (key.length >= 3) return { key, index };
   }
   return null;
@@ -156,7 +189,11 @@ function filterReasons(item: PlaylistItem, settings: Settings) {
     const year = Number(item.publishedAt?.slice(0, 4));
     if (!filters.years.includes(year)) reasons.push("upload year");
   }
+  if (item.liveStatus === "upcoming") reasons.push("upcoming livestream");
+  if (item.liveStatus === "live" && !filters.playLivestreams)
+    reasons.push("livestreams");
   if (
+    item.liveStatus !== "live" &&
     filters.durations.length &&
     !filters.durations.includes(
       durationBucket(item.duration) as (typeof filters.durations)[number],
@@ -171,6 +208,7 @@ function filterReasons(item: PlaylistItem, settings: Settings) {
     reasons.push("not embeddable");
   const size = estimatedDownloadGb(item, settings);
   if (
+    item.liveStatus !== "live" &&
     filters.maxEstimatedSizeGb > 0 &&
     (size === null || size > filters.maxEstimatedSizeGb)
   )
@@ -185,7 +223,6 @@ function filterReasons(item: PlaylistItem, settings: Settings) {
 
 function seriesBlocks(items: PlaylistItem[], limit: number) {
   const blocks: PlaylistItem[][] = [];
-  const deferred: PlaylistItem[][] = [];
   const bySeries = new Map<string, PlaylistItem[]>();
   for (const item of items)
     if (item.seriesKey) {
@@ -193,25 +230,25 @@ function seriesBlocks(items: PlaylistItem[], limit: number) {
       group.push(item);
       bySeries.set(item.seriesKey, group);
     }
+
   const emitted = new Set<string>();
-  for (const item of items) {
-    if (!item.seriesKey) {
-      blocks.push([item]);
+  for (const trigger of items) {
+    if (emitted.has(trigger.id)) continue;
+    if (!trigger.seriesKey) {
+      emitted.add(trigger.id);
+      blocks.push([trigger]);
       continue;
     }
-    if (emitted.has(item.seriesKey)) continue;
-    emitted.add(item.seriesKey);
-    const group = (bySeries.get(item.seriesKey) ?? [item]).sort(
-      (a, b) => (a.seriesIndex ?? 0) - (b.seriesIndex ?? 0),
-    );
-    const chunks = Array.from(
-      { length: Math.ceil(group.length / limit) },
-      (_, index) => group.slice(index * limit, (index + 1) * limit),
-    );
-    blocks.push(chunks[0]);
-    deferred.push(...chunks.slice(1));
+    const triggerIndex = trigger.seriesIndex ?? 0;
+    const continuation = (bySeries.get(trigger.seriesKey) ?? [trigger])
+      .filter((item) => !emitted.has(item.id) && (item.seriesIndex ?? 0) >= triggerIndex)
+      .sort((a, b) => (a.seriesIndex ?? 0) - (b.seriesIndex ?? 0))
+      .slice(0, limit);
+    const block = continuation.length ? continuation : [trigger];
+    for (const item of block) emitted.add(item.id);
+    blocks.push(block);
   }
-  return [...blocks, ...deferred];
+  return blocks;
 }
 
 function weightedBlockIndex(
@@ -242,7 +279,7 @@ export function prepareQueue(
   random = randomInt,
 ) {
   const detected = items.map((item) => {
-    const series = detectSeries(item.title, settings.filters.seriesMode);
+    const series = item.liveStatus === "live" ? null : detectSeries(item.title, settings.filters.seriesMode);
     return {
       ...item,
       seriesKey: series?.key ?? "",
@@ -281,7 +318,9 @@ export function prepareQueue(
       (reason) =>
         reason === "regional restriction" ||
         reason === "not embeddable" ||
-        reason === "YouTube Shorts",
+        reason === "YouTube Shorts" ||
+        reason === "livestreams" ||
+        reason === "upcoming livestream",
     );
     const included =
       itemReasons.length === 0 ||

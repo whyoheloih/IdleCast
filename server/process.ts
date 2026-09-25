@@ -96,9 +96,11 @@ export async function runCapture(
         if (checking) return;
         checking = true;
         check()
-          .catch(() => {
+          .catch((error) => {
             failureReason =
-              "Media cache limit exceeded or cache storage is unavailable";
+              error instanceof Error
+                ? error.message
+                : "Media cache limit exceeded or cache storage is unavailable";
             bounded.abort();
           })
           .finally(() => {

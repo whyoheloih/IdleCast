@@ -1,5 +1,6 @@
 import { EventEmitter } from "node:events";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
+import { readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import type { Config, Settings } from "./config.js";
 import { Store, type StoredItem } from "./db.js";
@@ -74,7 +75,9 @@ export class Engine extends EventEmitter {
   private currentMedia: { file: string; duration: number } | null = null;
   private download: DownloadActivity | null = null;
   private bufferedIds = new Set<string>();
-  private preparedMedia = new Map<string, { file: string; info: any }>();
+  private preparedMedia = new Map<string, { file: string; info: any; size: number }>();
+  private downloadStates = new Map<string, DownloadActivity>();
+  private cachedSizes = new Map<string, number>();
   private refillTask: Promise<void> | null = null;
   private readonly bufferLimit = 5;
   private bufferedCount = 0;
@@ -112,6 +115,17 @@ export class Engine extends EventEmitter {
     this.playlist =
       dependencies.playlist ??
       new YouTubePlaylistProvider(config.YOUTUBE_API_KEY);
+    try {
+      const cache = path.join(config.DATA_DIR, "cache");
+      for (const name of readdirSync(cache)) {
+        const match = name.match(/^([A-Za-z0-9_-]{11})\.\d+p\d+\.(?:mp4|mkv|webm)$/);
+        if (match)
+          this.cachedSizes.set(
+            match[1],
+            (this.cachedSizes.get(match[1]) ?? 0) + statSync(path.join(cache, name)).size,
+          );
+      }
+    } catch {}
     this.resyncTimer = setInterval(() => {
       const s = store.settings();
       if (
@@ -125,6 +139,45 @@ export class Engine extends EventEmitter {
   event(message?: string, level = "info") {
     if (message) this.store.log(level, message);
     this.emit("change");
+  }
+  private downloadQueue() {
+    const items = this.store.all();
+    const currentId = this.current?.videoId;
+    const active = this.download;
+    const visible = items.filter((item) =>
+      item.videoId === currentId ||
+      this.bufferedIds.has(item.videoId) ||
+      this.downloadStates.has(item.videoId) ||
+      this.cachedSizes.has(item.videoId) ||
+      (item.liveStatus === "live" && item.available),
+    );
+    const entries = visible.map((item) => {
+      const prepared = this.preparedMedia.get(item.videoId);
+      const activity = this.downloadStates.get(item.videoId);
+      return {
+        id: item.id,
+        videoId: item.videoId,
+        position: item.position,
+        title: item.title,
+        thumbnail: item.thumbnail,
+        seriesKey: item.seriesKey,
+        seriesIndex: item.seriesIndex,
+        current: item.videoId === currentId,
+        status:
+          item.liveStatus === "live" && item.videoId === currentId
+            ? "LIVE"
+            : activity?.status ?? (prepared || this.cachedSizes.has(item.videoId) ? "downloaded" : "queued"),
+        percent: activity?.percent ?? (prepared || this.cachedSizes.has(item.videoId) ? 100 : 0),
+        attempt: activity?.attempt ?? 0,
+        bytes: prepared?.size ?? activity?.bytes ?? this.cachedSizes.get(item.videoId) ?? 0,
+        error: activity?.error ?? item.error,
+      };
+    }).sort((a, b) => Number(b.current) - Number(a.current) || a.position - b.position);
+    return {
+      entries,
+      totalBytes: entries.reduce((sum, entry) => sum + entry.bytes, 0),
+      active,
+    };
   }
   snapshot() {
     return {
@@ -152,6 +205,7 @@ export class Engine extends EventEmitter {
       }),
       bufferedCount: this.bufferedCount,
       bufferTarget: this.bufferTarget,
+      downloadQueue: this.downloadQueue(),
     };
   }
   sync(): Promise<void> {
@@ -296,6 +350,12 @@ export class Engine extends EventEmitter {
     this.bufferedCount = 0;
     const initial = this.bufferCandidates(this.store.all());
     this.bufferTarget = Math.min(this.bufferLimit, initial.length);
+    for (const item of initial.slice(0, this.bufferTarget))
+      if (!this.cachedSizes.has(item.videoId))
+        this.downloadStates.set(item.videoId, {
+          videoId: item.videoId, title: item.title, thumbnail: item.thumbnail,
+          percent: 0, status: "queued", attempt: 0,
+        });
     for (const name of ["youtube", "twitch"] as const)
       this.outputs[name] = {
         status: s[name].enabled ? "buffering" : "disabled",
@@ -310,6 +370,13 @@ export class Engine extends EventEmitter {
           this.store.all(),
           signal,
           this.bufferTarget,
+        );
+        // Permanently failed/retry-delayed items cannot hold startup at 3/5
+        // forever. Start once every currently eligible finite item is ready.
+        const eligibleNow = this.bufferCandidates(this.store.all()).length;
+        this.bufferTarget = Math.min(
+          this.bufferTarget,
+          Math.max(this.bufferedIds.size, eligibleNow),
         );
         if (this.bufferedIds.size < this.bufferTarget) {
           this.event(
@@ -539,11 +606,27 @@ export class Engine extends EventEmitter {
         ? new LocalMediaSource(this.config.MEDIA_DIR)
         : new ExperimentalYouTubeSource(this.config, undefined, s, {
             onDownload: (download) => {
-              this.download = download;
-              void writeLoadingStatus(this.config, download).catch(() => {});
-              this.event();
+              this.download = download?.status === "live" ? null : download;
+              if (download) this.downloadStates.set(download.videoId, download);
+              void writeLoadingStatus(
+                this.config,
+                download?.status === "live" ? null : download,
+              ).catch(() => {});
+              if (download?.status === "retrying")
+                this.event(
+                  "Retrying stalled download (attempt " + download.attempt + "/3): " + download.title,
+                  "warn",
+                );
+              else if (download?.status === "failed")
+                this.event("Download failed after 3 attempts: " + download.title + " — " + (download.error ?? "unknown error"), "warn");
+              else this.event();
             },
-            onDelete: (filename) => this.event("Cache deleted: " + filename),
+            onDelete: (filename) => {
+              const id = filename.split(".")[0];
+              this.downloadStates.delete(id);
+              this.cachedSizes.delete(id);
+              this.event("Cache deleted: " + filename);
+            },
           }))
     );
   }
@@ -566,6 +649,7 @@ export class Engine extends EventEmitter {
     ).filter((item) => {
       if (
         !item.available ||
+        item.liveStatus === "live" ||
         item.retryAt > Date.now() ||
         seen.has(item.videoId)
       )
@@ -608,6 +692,12 @@ export class Engine extends EventEmitter {
   ) {
     const candidates = this.bufferCandidates(items, startIndex);
     const wanted = Math.min(target, candidates.length);
+    for (const item of candidates.slice(0, wanted))
+      if (!this.bufferedIds.has(item.videoId) && !this.cachedSizes.has(item.videoId) && !this.downloadStates.has(item.videoId))
+        this.downloadStates.set(item.videoId, {
+          videoId: item.videoId, title: item.title, thumbnail: item.thumbnail,
+          percent: 0, status: "queued", attempt: 0,
+        });
     source.retain?.([
       ...this.bufferedIds,
       ...candidates.slice(0, wanted).map((item) => item.videoId),
@@ -629,7 +719,18 @@ export class Engine extends EventEmitter {
       try {
         const file = await source.resolve(item, signal);
         const info = await this.probeMedia(file, signal);
-        this.preparedMedia.set(item.videoId, { file, info });
+        const size = (await stat(file)).size;
+        this.preparedMedia.set(item.videoId, { file, info, size });
+        this.cachedSizes.set(item.videoId, size);
+        this.downloadStates.set(item.videoId, {
+          videoId: item.videoId,
+          title: item.title,
+          thumbnail: item.thumbnail,
+          percent: 100,
+          status: "downloaded",
+          attempt: this.downloadStates.get(item.videoId)?.attempt ?? 1,
+          bytes: size,
+        });
         this.bufferedIds.add(item.videoId);
         this.bufferedCount = this.bufferedIds.size;
         this.download = null;
@@ -779,12 +880,22 @@ export class Engine extends EventEmitter {
             item.title +
             ". The complete video is downloaded before playback.",
         );
-        const prepared = this.preparedMedia.get(item.videoId);
-        const file = prepared?.file ?? (await source.resolve(item, clipSignal));
-        const info = prepared?.info ?? (await this.probeMedia(file, clipSignal));
+        const live = item.liveStatus === "live";
+        const prepared = live ? undefined : this.preparedMedia.get(item.videoId);
+        if (live && !source.resolveLive)
+          throw new Error("The selected media source cannot play livestreams");
+        const file = live
+          ? await source.resolveLive!(item, clipSignal)
+          : prepared?.file ?? (await source.resolve(item, clipSignal));
+        const info = live
+          ? { format: { duration: Number.MAX_SAFE_INTEGER }, streams: [
+              { codec_type: "video", codec_name: "live" },
+              { codec_type: "audio", codec_name: "live", sample_rate: String(audioSampleRate(s)), channels: 2 },
+            ] }
+          : prepared?.info ?? (await this.probeMedia(file, clipSignal));
         const duration = Number(info.format.duration);
-        const offset = resume < duration - 1 ? resume : 0;
-        const hasAudio = info.streams.some(
+        const offset = live ? 0 : resume < duration - 1 ? resume : 0;
+        const hasAudio = live || info.streams.some(
           (x: any) => x.codec_type === "audio",
         );
         const audio = info.streams.find((x: any) => x.codec_type === "audio");
@@ -804,7 +915,7 @@ export class Engine extends EventEmitter {
           this.store.get<Record<string, string>>("uploadDates", {})[
             item.videoId
           ],
-          {
+          live ? undefined : {
             offset,
             total: duration,
           },
@@ -820,9 +931,9 @@ export class Engine extends EventEmitter {
           "pipe:1",
           "-stats_period",
           "1",
-          "-re",
-          "-ss",
-          String(offset),
+          ...(live
+            ? ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
+            : ["-re", "-ss", String(offset)]),
           "-i",
           file,
           "-f",
@@ -836,8 +947,7 @@ export class Engine extends EventEmitter {
           "[v]",
           "-map",
           hasAudio ? "0:a:0" : "1:a:0",
-          "-t",
-          String(duration - offset),
+          ...(live ? [] : ["-t", String(duration - offset)]),
           ...encodeArgs(
             s,
             this.config.UDP_BASE_PORT,
@@ -845,7 +955,7 @@ export class Engine extends EventEmitter {
           ),
         ];
         const child = launch(this.config.FFMPEG_PATH, args, clipSignal);
-        this.currentMedia = { file, duration };
+        this.currentMedia = live ? null : { file, duration };
         this.state = "playing";
         if (s.shuffle && shortStartsRemaining > 0) {
           const remaining = Math.max(0, shortStartsRemaining - 1);
@@ -910,7 +1020,7 @@ export class Engine extends EventEmitter {
                         activeSettings,
                         undefined,
                         publishedAt,
-                        { offset: this.elapsed, total: duration },
+                        live ? undefined : { offset: this.elapsed, total: duration },
                       ).then(() =>
                         this.event("Restored stale title/date overlay", "warn"),
                       );
@@ -981,6 +1091,8 @@ export class Engine extends EventEmitter {
       if (consumed) {
         this.bufferedIds.delete(item.videoId);
         this.preparedMedia.delete(item.videoId);
+        this.downloadStates.delete(item.videoId);
+        this.cachedSizes.delete(item.videoId);
         this.bufferedCount = this.bufferedIds.size;
         await source.remove?.(item.videoId).catch(() => {});
         this.event();

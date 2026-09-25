@@ -1371,3 +1371,59 @@ footer span {
     grid-template-columns: 1fr;
   }
 }
+.download-queue-help {
+  padding: 13px 23px;
+  border-top: 1px solid #2b3038;
+  border-bottom: 1px solid #2b3038;
+  color: #929ca8;
+  font-size: 11px;
+}
+.download-queue-list { padding-bottom: 6px; }
+.download-queue-row {
+  position: relative;
+  min-height: 82px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 23px;
+  border-top: 1px solid #282d34;
+}
+.download-queue-row[draggable="true"] { cursor: grab; }
+.download-queue-row[draggable="true"]:active { cursor: grabbing; opacity: .72; }
+.queue-grip { color: #66717d; flex-shrink: 0; }
+.download-queue-row .row-title progress { width: min(420px, 100%); height: 5px; margin-top: 8px; accent-color: #b6ee7a; }
+.queue-status {
+  flex-shrink: 0;
+  min-width: 92px;
+  text-align: center;
+  text-transform: uppercase;
+  font-size: 9px;
+  letter-spacing: .8px;
+  color: #c4ccd5;
+  border: 1px solid #3b424c;
+  border-radius: 12px;
+  padding: 5px 8px;
+}
+.status-downloaded, .status-live { color: #b6ee7a; border-color: #485c3b; }
+.status-failed { color: #ee9390; border-color: #64383b; }
+.status-retrying { color: #dfb77b; border-color: #655139; }
+.queue-drop-ghost {
+  position: absolute;
+  z-index: 4;
+  inset: -18px 18px auto;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border: 2px dashed #b6ee7a;
+  border-radius: 7px;
+  color: #c9f2a6;
+  background: #273522ee;
+  box-shadow: 0 0 18px #9bd86333;
+  font-size: 10px;
+  pointer-events: none;
+}
+@media (max-width: 720px) {
+  .download-queue-row { padding: 10px 12px; gap: 8px; }
+  .queue-status { min-width: 0; max-width: 88px; }
+  .queue-grip { display: none; }
+}

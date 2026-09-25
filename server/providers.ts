@@ -1,7 +1,7 @@
 import { realpath, stat, readdir, rm, mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Config, Settings } from "./config.js";
-import { runCapture, withCancellation } from "./process.js";
+import { runCapture, withCancellation, delay } from "./process.js";
 
 export type PlaylistItem = {
   id: string;
@@ -21,6 +21,7 @@ export type PlaylistItem = {
   isShort?: boolean;
   playCount?: number;
   selectionPenalty?: number;
+  liveStatus?: "none" | "live" | "upcoming";
 };
 export interface PlaylistProvider {
   fetch(playlistId: string, signal: AbortSignal): Promise<PlaylistItem[]>;
@@ -30,6 +31,10 @@ export type DownloadActivity = {
   title: string;
   thumbnail: string;
   percent: number | null;
+  status: "queued" | "downloading" | "retrying" | "downloaded" | "failed" | "live";
+  attempt: number;
+  bytes?: number;
+  error?: string;
 };
 export type MediaSourceHooks = {
   onDownload?: (activity: DownloadActivity | null) => void;
@@ -37,6 +42,7 @@ export type MediaSourceHooks = {
 };
 export interface MediaSourceProvider {
   resolve(item: PlaylistItem, signal: AbortSignal): Promise<string>;
+  resolveLive?(item: PlaylistItem, signal: AbortSignal): Promise<string>;
   pin?(id: string): void;
   retain?(ids: string[]): void;
   remove?(id: string): Promise<void>;
@@ -162,11 +168,18 @@ export class YouTubePlaylistProvider implements PlaylistProvider {
     }
     for (const item of items) {
       const v = videos.get(item.videoId);
+      const broadcast = v?.snippet?.liveBroadcastContent;
+      item.liveStatus =
+        broadcast === "live" ? "live" : broadcast === "upcoming" ? "upcoming" : "none";
       item.available =
         !!v &&
         v.status?.privacyStatus !== "private" &&
-        v.snippet?.liveBroadcastContent !== "live";
-      item.duration = v ? parseDuration(v.contentDetails?.duration) : null;
+        item.liveStatus !== "upcoming";
+      item.duration = item.liveStatus === "live"
+        ? null
+        : v
+          ? parseDuration(v.contentDetails?.duration)
+          : null;
       item.publishedAt = v?.snippet?.publishedAt ?? "";
       const shortMetadata = [
         v?.snippet?.title,
@@ -236,24 +249,15 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
   constructor(
     private c: Config,
     private run: typeof runCapture = runCapture,
-    private quality: Pick<Settings, "height" | "fps"> = {
-      height: 720,
-      fps: 30,
-    },
+    private quality: Pick<Settings, "height" | "fps"> = { height: 720, fps: 30 },
     private hooks: MediaSourceHooks = {},
   ) {}
-  pin(id: string) {
-    this.retain([id]);
-  }
-  retain(ids: string[]) {
-    this.retained = new Set(ids.map((id) => this.cacheName(id)));
-  }
+  pin(id: string) { this.retain([id]); }
+  retain(ids: string[]) { this.retained = new Set(ids.map((id) => this.cacheName(id))); }
   async remove(id: string) {
     const root = path.join(this.c.DATA_DIR, "cache");
     await mkdir(root, { recursive: true });
-    const base = this.cacheName(id) + ".";
-    for (const name of await readdir(root))
-      if (name.startsWith(base)) await this.removeCached(root, name);
+    await this.cleanup(root, id);
   }
   async resolve(item: PlaylistItem, signal: AbortSignal): Promise<string> {
     signal = AbortSignal.any([signal, this.lifetime.signal]);
@@ -264,144 +268,126 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
     if (cached) return cached;
     const existing = this.pending.get(item.videoId);
     if (existing) return withCancellation(existing, signal);
-    const task = this.queue
-      .then(() => {
-        signal.throwIfAborted();
-        return this.download(item, signal);
-      })
-      .finally(() => this.pending.delete(item.videoId));
+    this.hooks.onDownload?.(this.activity(item, "queued", 0, 0));
+    const task = this.queue.then(() => this.download(item, signal)).finally(() => this.pending.delete(item.videoId));
     this.queue = task.catch(() => {});
     this.pending.set(item.videoId, task);
     return withCancellation(task, signal);
   }
-  async close() {
-    this.lifetime.abort();
-    await this.queue;
+  async resolveLive(item: PlaylistItem, signal: AbortSignal): Promise<string> {
+    if (!this.c.EXPERIMENTAL_YOUTUBE) throw new Error("Experimental YouTube source is disabled");
+    if (!/^[A-Za-z0-9_-]{11}$/.test(item.videoId)) throw new Error("Invalid YouTube video identifier");
+    this.hooks.onDownload?.(this.activity(item, "live", null, 1));
+    const output = await this.run(
+      this.c.YTDLP_PATH,
+      ["--ignore-config", ...(this.c.YTDLP_COOKIES_FILE ? ["--cookies", this.c.YTDLP_COOKIES_FILE] : []),
+       "--no-playlist", "--no-color", "--js-runtimes", "node:" + process.execPath,
+       "--socket-timeout", "20", "--retries", "2",
+       "-f", "best[acodec!=none][vcodec!=none]/best", "-g", "--",
+       "https://www.youtube.com/watch?v=" + item.videoId],
+      AbortSignal.any([signal, this.lifetime.signal]), 60000,
+    );
+    const url = output.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+    if (!url || !/^https?:\/\//.test(url)) throw new Error("YouTube live stream URL could not be resolved");
+    return url;
   }
-  private cacheName(id: string) {
-    return `${id}.${this.quality.height}p${this.quality.fps}`;
+  async close() { this.lifetime.abort(); await this.queue; }
+  private activity(item: PlaylistItem, status: DownloadActivity["status"], percent: number | null, attempt: number, extra: Partial<DownloadActivity> = {}): DownloadActivity {
+    return { videoId: item.videoId, title: item.title, thumbnail: item.thumbnail, percent, status, attempt, ...extra };
   }
+  private cacheName(id: string) { return id + "." + this.quality.height + "p" + this.quality.fps; }
   private async cachedFile(root: string, id: string) {
-    for (const ext of ["mp4", "mkv", "webm"])
-      try {
-        return await containedFile(root, this.cacheName(id) + "." + ext);
-      } catch {}
+    for (const ext of ["mp4", "mkv", "webm"]) try { return await containedFile(root, this.cacheName(id) + "." + ext); } catch {}
     return "";
   }
   private async removeCached(root: string, name: string) {
     await rm(path.join(root, name), { force: true });
     this.hooks.onDelete?.(name);
   }
+  private async cleanup(root: string, id: string) {
+    const base = this.cacheName(id) + ".";
+    for (const name of await readdir(root)) if (name.startsWith(base)) await this.removeCached(root, name);
+  }
   private async download(item: PlaylistItem, signal: AbortSignal) {
-    if (!this.c.EXPERIMENTAL_YOUTUBE)
-      throw new Error("Experimental YouTube source is disabled");
-    if (!/^[A-Za-z0-9_-]{11}$/.test(item.videoId))
-      throw new Error("Invalid YouTube video identifier");
+    if (!this.c.EXPERIMENTAL_YOUTUBE) throw new Error("Experimental YouTube source is disabled");
+    if (!/^[A-Za-z0-9_-]{11}$/.test(item.videoId)) throw new Error("Invalid YouTube video identifier");
     const root = path.join(this.c.DATA_DIR, "cache");
     await mkdir(root, { recursive: true });
     const limit = this.c.CACHE_MAX_MB * 1024 * 1024;
     const requested = this.cacheName(item.videoId);
     for (const name of await readdir(root))
-      if (
-        ![...this.retained].some((base) => name.startsWith(base + ".")) &&
-        !name.startsWith(requested + ".")
-      )
+      if (![...this.retained].some((base) => name.startsWith(base + ".")) && !name.startsWith(requested + "."))
         await this.removeCached(root, name);
     const cached = await this.cachedFile(root, item.videoId);
     if (cached) return cached;
-    this.hooks.onDownload?.({
-      videoId: item.videoId,
-      title: item.title,
-      thumbnail: item.thumbnail,
-      percent: 0,
-    });
-    try {
-      await this.run(
-        this.c.YTDLP_PATH,
-        [
-          "--ignore-config",
-          ...(this.c.YTDLP_COOKIES_FILE
-            ? ["--cookies", this.c.YTDLP_COOKIES_FILE]
-            : []),
-          "--no-playlist",
-          "--newline",
-          "--progress",
-          "--no-color",
-          "--progress-template",
-          "download:%(progress._percent_str)s",
-          "--no-cache-dir",
-          "--concurrent-fragments",
-          "4",
-          "--buffer-size",
-          "1M",
-          "--no-resize-buffer",
-          "--js-runtimes",
-          "node:" + process.execPath,
-          "--max-filesize",
-          String(limit),
-          "--socket-timeout",
-          "20",
-          "--retries",
-          "2",
-          "--fragment-retries",
-          "2",
-          "--ffmpeg-location",
-          this.c.FFMPEG_PATH,
-          "--merge-output-format",
-          "mp4",
-          "-f",
-          `bv*[height<=${this.quality.height}]+ba/b[height<=${this.quality.height}]`,
-          "-S",
-          `res:${this.quality.height},fps:${this.quality.fps}`,
-          "-o",
-          path.join(root, this.cacheName(item.videoId) + ".%(ext)s"),
-          "--",
-          "https://www.youtube.com/watch?v=" + item.videoId,
-        ],
-        signal,
-        21600000,
-        async () => {
-          let size = 0;
-          for (const name of await readdir(root)) {
-            try {
-              size += (await stat(path.join(root, name))).size;
-            } catch (e: any) {
-              if (e.code !== "ENOENT") throw e;
-            }
-          }
-          if (size > limit) throw new Error("Media cache limit exceeded");
-        },
-        (chunk) => {
-          for (const match of chunk.matchAll(/download:\s*([0-9.]+)%/g)) {
-            const percent = Number(match[1]);
-            if (Number.isFinite(percent))
-              this.hooks.onDownload?.({
-                videoId: item.videoId,
-                title: item.title,
-                thumbnail: item.thumbnail,
-                percent: Math.max(0, Math.min(100, percent)),
-              });
-          }
-        },
-      );
-      this.hooks.onDownload?.({
-        videoId: item.videoId,
-        title: item.title,
-        thumbnail: item.thumbnail,
-        percent: 100,
-      });
-    } catch (e) {
-      this.hooks.onDownload?.(null);
-      for (const name of await readdir(root))
-        if (name.startsWith(this.cacheName(item.videoId) + "."))
-          await this.removeCached(root, name);
-      throw e;
+    let lastError: unknown;
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      signal.throwIfAborted();
+      if (attempt > 1) {
+        this.hooks.onDownload?.(this.activity(item, "retrying", 0, attempt));
+        await delay(Math.min(15000, 3000 * attempt), signal);
+      }
+      await this.cleanup(root, item.videoId);
+      try {
+        const file = await this.downloadAttempt(root, item, limit, attempt, signal);
+        this.hooks.onDownload?.(this.activity(item, "downloaded", 100, attempt, { bytes: (await stat(file)).size }));
+        return file;
+      } catch (error) {
+        lastError = error;
+        await this.cleanup(root, item.videoId);
+        if (signal.aborted) throw error;
+      }
     }
+    const message = lastError instanceof Error ? lastError.message : "Media download failed";
+    this.hooks.onDownload?.(this.activity(item, "failed", null, 3, { error: message }));
+    throw new Error(message);
+  }
+  private async downloadAttempt(root: string, item: PlaylistItem, limit: number, attempt: number, signal: AbortSignal) {
+    let lastProgress = Date.now();
+    let lastBytes = 0;
+    let lastPercent = -1;
+    this.hooks.onDownload?.(this.activity(item, "downloading", 0, attempt));
+    await this.run(
+      this.c.YTDLP_PATH,
+      ["--ignore-config", ...(this.c.YTDLP_COOKIES_FILE ? ["--cookies", this.c.YTDLP_COOKIES_FILE] : []),
+       "--no-playlist", "--newline", "--progress", "--no-color",
+       "--progress-template", "download:%(progress._percent_str)s", "--no-cache-dir",
+       "--concurrent-fragments", "4", "--buffer-size", "1M", "--no-resize-buffer",
+       "--js-runtimes", "node:" + process.execPath, "--max-filesize", String(limit),
+       "--socket-timeout", "20", "--retries", "2", "--fragment-retries", "2",
+       "--ffmpeg-location", this.c.FFMPEG_PATH, "--merge-output-format", "mp4",
+       "-f", "bv*[height<=" + this.quality.height + "]+ba/b[height<=" + this.quality.height + "]",
+       "-S", "res:" + this.quality.height + ",fps:" + this.quality.fps,
+       "-o", path.join(root, this.cacheName(item.videoId) + ".%(ext)s"), "--",
+       "https://www.youtube.com/watch?v=" + item.videoId],
+      signal, 43200000,
+      async () => {
+        let total = 0;
+        for (const name of await readdir(root)) {
+          try { total += (await stat(path.join(root, name))).size; }
+          catch (error: any) { if (error.code !== "ENOENT") throw error; }
+        }
+        if (total > limit) throw new Error("Media cache limit exceeded");
+        if (total > lastBytes) {
+          lastBytes = total;
+          lastProgress = Date.now();
+          this.hooks.onDownload?.(this.activity(item, "downloading", null, attempt, { bytes: total }));
+        }
+        if (Date.now() - lastProgress > 120000) throw new Error("Download stalled with no meaningful progress for 2 minutes");
+      },
+      (chunk) => {
+        for (const match of chunk.matchAll(/download:\s*([0-9.]+)%/g)) {
+          const percent = Number(match[1]);
+          if (Number.isFinite(percent) && percent > lastPercent) {
+            lastPercent = percent;
+            lastProgress = Date.now();
+            this.hooks.onDownload?.(this.activity(item, "downloading", Math.max(0, Math.min(100, percent)), attempt, { bytes: lastBytes }));
+          }
+        }
+      },
+    );
     const file = await this.cachedFile(root, item.videoId);
-    if (!file)
-      throw new Error(
-        "Download produced no merged media; check FFmpeg location and cache limit",
-      );
+    if (!file) throw new Error("Download produced no merged media; check FFmpeg location and cache limit");
     if ((await stat(file)).size > limit) {
       await this.removeCached(root, path.basename(file));
       throw new Error("Media exceeds the cache limit");

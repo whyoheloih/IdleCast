@@ -154,6 +154,7 @@ const filterSettings = z
     seriesMode: z.enum(["off", "strict", "smart"]).default("off"),
     seriesLimit: z.number().int().min(2).max(50).default(10),
     includeShorts: z.boolean().default(false),
+    playLivestreams: z.boolean().default(false),
   })
   .strict()
   .default({
@@ -166,6 +167,7 @@ const filterSettings = z
     seriesMode: "off",
     seriesLimit: 10,
     includeShorts: false,
+    playLivestreams: false,
   });
 
 export const settingsSchema = z

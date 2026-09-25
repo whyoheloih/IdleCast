@@ -7,6 +7,7 @@ export type StoredItem = PlaylistItem & {
   error: string | null;
   seriesKey: string;
   seriesIndex: number | null;
+  liveStatus: "none" | "live" | "upcoming";
 };
 export class Store {
   db: DatabaseSync;
@@ -20,21 +21,25 @@ export class Store {
   private migrate() {
     const version = (this.db.prepare("PRAGMA user_version").get() as any)
       .user_version;
-    if (version > 2)
+    if (version > 3)
       throw new Error("Database is newer than this version of IdleCast");
     if (version === 0)
       this.db.exec(`
    BEGIN IMMEDIATE;
    CREATE TABLE kv(key TEXT PRIMARY KEY,value TEXT NOT NULL);
-   CREATE TABLE items(id TEXT PRIMARY KEY,videoId TEXT NOT NULL,position INTEGER NOT NULL,title TEXT NOT NULL,channel TEXT NOT NULL,thumbnail TEXT NOT NULL,available INTEGER NOT NULL,duration REAL,failures INTEGER NOT NULL DEFAULT 0,retryAt INTEGER NOT NULL DEFAULT 0,error TEXT,seriesKey TEXT NOT NULL DEFAULT '',seriesIndex INTEGER);
+   CREATE TABLE items(id TEXT PRIMARY KEY,videoId TEXT NOT NULL,position INTEGER NOT NULL,title TEXT NOT NULL,channel TEXT NOT NULL,thumbnail TEXT NOT NULL,available INTEGER NOT NULL,duration REAL,liveStatus TEXT NOT NULL DEFAULT 'none',failures INTEGER NOT NULL DEFAULT 0,retryAt INTEGER NOT NULL DEFAULT 0,error TEXT,seriesKey TEXT NOT NULL DEFAULT '',seriesIndex INTEGER);
    CREATE INDEX items_order ON items(position,id);
    CREATE TABLE logs(id INTEGER PRIMARY KEY AUTOINCREMENT,time INTEGER NOT NULL,level TEXT NOT NULL,message TEXT NOT NULL);
    CREATE TABLE sessions(hash TEXT PRIMARY KEY,expires INTEGER NOT NULL);
-   PRAGMA user_version=2;
+   PRAGMA user_version=3;
    COMMIT;`);
     if (version === 1)
       this.db.exec(
         "BEGIN IMMEDIATE; ALTER TABLE items ADD COLUMN seriesKey TEXT NOT NULL DEFAULT ''; ALTER TABLE items ADD COLUMN seriesIndex INTEGER; PRAGMA user_version=2; COMMIT;",
+      );
+    if (version === 1 || version === 2)
+      this.db.exec(
+        "BEGIN IMMEDIATE; ALTER TABLE items ADD COLUMN liveStatus TEXT NOT NULL DEFAULT 'none'; PRAGMA user_version=3; COMMIT;",
       );
   }
   get<T>(key: string, fallback: T): T {
@@ -63,6 +68,7 @@ export class Store {
       available: !!i.available,
       seriesKey: i.seriesKey ?? "",
       seriesIndex: i.seriesIndex ?? null,
+      liveStatus: i.liveStatus ?? "none",
     }));
   }
   all(): StoredItem[] {
@@ -76,7 +82,7 @@ export class Store {
     try {
       this.db.exec("CREATE TEMP TABLE incoming(id TEXT PRIMARY KEY)");
       const put = this.db.prepare(
-        "INSERT INTO items(id,videoId,position,title,channel,thumbnail,available,duration,seriesKey,seriesIndex) VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET videoId=excluded.videoId,position=excluded.position,title=excluded.title,channel=excluded.channel,thumbnail=excluded.thumbnail,available=excluded.available,duration=excluded.duration,seriesKey=excluded.seriesKey,seriesIndex=excluded.seriesIndex",
+        "INSERT INTO items(id,videoId,position,title,channel,thumbnail,available,duration,liveStatus,seriesKey,seriesIndex) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET videoId=excluded.videoId,position=excluded.position,title=excluded.title,channel=excluded.channel,thumbnail=excluded.thumbnail,available=excluded.available,duration=excluded.duration,liveStatus=excluded.liveStatus,seriesKey=excluded.seriesKey,seriesIndex=excluded.seriesIndex",
       );
       const mark = this.db.prepare("INSERT INTO incoming VALUES(?)");
       for (const i of items) {
@@ -89,6 +95,7 @@ export class Store {
           i.thumbnail,
           Number(i.available),
           i.duration,
+          i.liveStatus ?? "none",
           i.seriesKey ?? "",
           i.seriesIndex ?? null,
         );
