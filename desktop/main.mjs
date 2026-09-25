@@ -29,6 +29,25 @@ let tray;
 let quitting = false;
 let backendStartedByDesktop = false;
 let dashboardPassword = "";
+const shellLog = path.join(app.getPath("userData"), "desktop-shell.log");
+function logShell(message, error) {
+  const detail =
+    error instanceof Error
+      ? ": " + (error.stack ?? error.message)
+      : error
+        ? ": " + String(error)
+        : "";
+  try {
+    writeFileSync(
+      shellLog,
+      new Date().toISOString() + " " + message + detail + "\n",
+      { flag: "a" },
+    );
+  } catch {}
+}
+process.on("uncaughtException", (error) => logShell("Uncaught exception", error));
+process.on("unhandledRejection", (error) => logShell("Unhandled rejection", error));
+logShell("Desktop shell launched");
 
 function packagedResource(...parts) {
   return path.join(process.resourcesPath, ...parts);
@@ -262,35 +281,43 @@ function createTray() {
   refreshTrayMenu();
 }
 
-if (!app.requestSingleInstanceLock()) app.quit();
+const hasSingleInstanceLock = app.requestSingleInstanceLock();
+logShell("Single-instance lock: " + hasSingleInstanceLock);
+if (!hasSingleInstanceLock) app.quit();
 else {
   app.on("second-instance", showWindow);
   app.on("before-quit", () => {
     quitting = true;
   });
   app.on("window-all-closed", () => {});
-  await app.whenReady();
-  try {
-    await startBackend();
-    createWindow();
-    createTray();
-    if (dashboardPassword) {
-      clipboard.writeText(dashboardPassword);
+  void app.whenReady().then(async () => {
+    logShell("Electron is ready");
+    try {
+      await startBackend();
+      logShell("Backend is ready");
+      createWindow();
+      logShell("Desktop window created");
+      createTray();
+      logShell("Tray created");
+      if (dashboardPassword) {
+        clipboard.writeText(dashboardPassword);
+        await dialog.showMessageBox({
+          type: "info",
+          title: "IdleCast is ready",
+          message: "Your new dashboard password was copied to the clipboard.",
+          detail:
+            "Paste it into the sign-in screen. You can copy it again from the tray menu.",
+        });
+      }
+    } catch (error) {
+      logShell("Desktop startup failed", error);
       await dialog.showMessageBox({
-        type: "info",
-        title: "IdleCast is ready",
-        message: "Your new dashboard password was copied to the clipboard.",
-        detail:
-          "Paste it into the sign-in screen. You can copy it again from the tray menu.",
+        type: "error",
+        title: "IdleCast could not start",
+        message: error instanceof Error ? error.message : String(error),
       });
+      quitting = true;
+      app.quit();
     }
-  } catch (error) {
-    await dialog.showMessageBox({
-      type: "error",
-      title: "IdleCast could not start",
-      message: error instanceof Error ? error.message : String(error),
-    });
-    quitting = true;
-    app.quit();
-  }
+  });
 }
