@@ -18,6 +18,7 @@ import { Engine } from "./engine.js";
 import { runCapture } from "./process.js";
 import { OverlayPreview } from "./preview.js";
 import { credentialStore } from "./credentials.js";
+import { APP_VERSION } from "./version.js";
 const digest = (token: string) =>
   createHash("sha256").update(token).digest("hex");
 export function createApp(c: Config, store: Store, engine: Engine) {
@@ -390,8 +391,11 @@ export function createApp(c: Config, store: Store, engine: Engine) {
     await engine.start();
     res.json({ ok: true });
   });
-  app.post("/api/stop", async (_req, res) => {
-    await engine.stop();
+  app.post("/api/stop", async (req, res) => {
+    const body = z
+      .object({ preserveDesired: z.boolean().optional() })
+      .parse(req.body ?? {});
+    await engine.stop(body.preserveDesired ?? false);
     res.json({ ok: true });
   });
   app.post("/api/skip", (_req, res) => {
@@ -423,7 +427,7 @@ export function createApp(c: Config, store: Store, engine: Engine) {
     );
     const disk = await statfs(c.DATA_DIR);
     const value = {
-      version: "1.1.3",
+      version: APP_VERSION,
       uptime: Math.floor(process.uptime()),
       memoryMB: Math.round(process.memoryUsage().rss / 1048576),
       freeDiskMB: Math.round((disk.bavail * disk.bsize) / 1048576),
@@ -513,9 +517,9 @@ export function createApp(c: Config, store: Store, engine: Engine) {
   );
   return {
     app,
-    closeStreams: () => {
+    closeStreams: async () => {
       for (const res of clients) res.end();
-      void preview.close();
+      await preview.close();
     },
   };
 }

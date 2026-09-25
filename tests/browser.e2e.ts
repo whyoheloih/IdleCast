@@ -257,7 +257,7 @@ try {
   );
 } finally {
   await browser.close();
-  closeStreams();
+  await closeStreams();
   await engine.close();
   await new Promise<void>((r) => server.close(() => r()));
   db.close();

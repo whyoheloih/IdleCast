@@ -6,11 +6,11 @@ A self-hosted, single-owner livestream control room. Paste a **YouTube playlist 
 
 IdleCast uses the **official YouTube Data API for metadata and ordering only**. Video/audio is fetched separately by an **experimental yt-dlp MediaSourceProvider**. You do not need to supply local video files for the primary workflow. Local files are an optional adapter for media you already have.
 
-## What v1.0.0 includes
+## What IdleCast includes
 
 - Complete YouTube playlist pagination, duplicate entries, original ordering, scheduled/manual resync, and atomic snapshots.
 - SQLite migrations, durable playback intent and cursor, five-second progress checkpoints, restart recovery, per-item failure cooldowns, and continuous looping.
-- A two-video rolling media cache, serialized next-item prefetch, visible download progress, cache-deletion logs, and a branded standby stream while downloads are slow or items are unavailable.
+- A five-video startup and rolling media cache, serialized downloads, visible download progress, cache-deletion logs, and a branded standby stream while downloads are slow or items are unavailable.
 - Selectable 720p or 1080p H.264/AAC output at 24, 30, or 60 fps, shared by independent RTMPS output workers.
 - Current video title and upload date in the bottom-left plus elapsed/total time in the bottom-right: **white text with a black outline and no background rectangle**. The title/date block is centered beside a proportional square avatar crop.
 - Combined playlist/channel queues, title exclusions, reshuffling, and manual queue ordering. Shuffled queues start with two videos of 15 minutes or less, keep ordinary videos over 70 minutes from playing consecutively, and place videos over 3 hours directly after a video of at least 2 hours for download lead time.
@@ -50,7 +50,7 @@ Open [http://localhost:3000](http://localhost:3000), sign in, and:
 4. In the destination's creator dashboard, prepare the live broadcast. IdleCast does not create/schedule YouTube broadcasts or change their visibility.
 5. Return to Overview and select **Start broadcast**. Confirm viewer playback in YouTube Studio/Twitch.
 
-The first download can take time. A standby slate begins after a short delay while media is prepared. Short transitions between clips are possible; IdleCast is not frame-perfect broadcast automation.
+The initial five-video buffer can take time. A standby slate starts immediately while media is prepared. IdleCast prepares upcoming media in advance and keeps the outgoing stream alive if an item is delayed or unavailable.
 
 ## Access on a VPS
 

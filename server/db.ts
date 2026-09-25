@@ -132,10 +132,11 @@ export class Store {
         id: string;
       }[]
     ).map((row) => row.id);
+    const requested = new Set(ids);
     if (
       ids.length !== current.length ||
-      new Set(ids).size !== current.length ||
-      current.some((id) => !ids.includes(id))
+      requested.size !== current.length ||
+      current.some((id) => !requested.has(id))
     )
       throw new Error("Queue order must contain every item exactly once");
     this.db.exec("BEGIN IMMEDIATE");

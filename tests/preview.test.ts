@@ -243,7 +243,7 @@ test("preview API requires authentication and Origin, renders drafts without sav
     assert.equal(db.settings().overlay.avatarSize, 112);
     assert.equal(db.settings().overlay.fontSize, 48);
   } finally {
-    closeStreams();
+    await closeStreams();
     await engine.close();
     await new Promise<void>((r) => server.close(() => r()));
     db.close();

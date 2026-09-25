@@ -150,6 +150,29 @@ test("admin authentication, write-origin checks, secret exclusion, validation, a
     assert.equal(store.all()[1].id, "drag-5");
     engine.state = "stopped";
 
+    store.set("desired", true);
+    assert.equal(
+      (
+        await fetch(base + "/api/stop", {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ preserveDesired: true }),
+        })
+      ).status,
+      200,
+    );
+    assert.equal(store.get("desired", false), true);
+    assert.equal(
+      (
+        await fetch(base + "/api/stop", {
+          method: "POST",
+          headers,
+        })
+      ).status,
+      200,
+    );
+    assert.equal(store.get("desired", true), false);
+
     assert.equal(
       (await fetch(base + "/api/start", { method: "POST", headers })).status,
       400,
@@ -160,7 +183,7 @@ test("admin authentication, write-origin checks, secret exclusion, validation, a
     );
     assert.equal((await fetch(base + "/api/state", { headers })).status, 401);
   } finally {
-    closeStreams();
+    await closeStreams();
     await engine.close();
     await new Promise<void>((r) => server.close(() => r()));
     store.close();

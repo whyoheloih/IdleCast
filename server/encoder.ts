@@ -141,6 +141,13 @@ export function standby(
 ) {
   const controller = new AbortController();
   const combined = AbortSignal.any([signal, controller.signal]);
+  let lastErrorReport = 0;
+  const reportError = () => {
+    const now = Date.now();
+    if (now - lastErrorReport < 30000) return;
+    lastErrorReport = now;
+    onError();
+  };
   const task = (async () => {
     while (!combined.aborted) {
       try {
@@ -158,7 +165,13 @@ export function standby(
         ).catch((error: NodeJS.ErrnoException) => {
           if (error.code !== "EEXIST") throw error;
         });
-        const ov = await overlay(c, s);
+        // Standby has its own text files; it must never overwrite the live
+        // title/date files while the next source is being prepared.
+        const ov = await overlay(
+          c,
+          s,
+          path.join(c.DATA_DIR, "standby-overlay"),
+        );
         const cat = path.resolve("media", "loading-cat.gif");
         const thumbnail = upNextThumbnailFile(c);
         const title = upNextTitleFile(c);
@@ -261,10 +274,10 @@ export function standby(
         child.stdout?.resume();
         await completion(child);
         if (combined.aborted) break;
-        onError();
+        reportError();
       } catch {
         if (combined.aborted) break;
-        onError();
+        reportError();
       }
       await delay(5000, combined);
     }

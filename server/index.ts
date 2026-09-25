@@ -4,6 +4,7 @@ import { readConfig } from "./config.js";
 import { Store } from "./db.js";
 import { Engine } from "./engine.js";
 import { createApp } from "./app.js";
+import { APP_VERSION } from "./version.js";
 try {
   process.loadEnvFile();
 } catch {}
@@ -37,19 +38,27 @@ const store = new Store(path.join(config.DATA_DIR, "idlecast.db"));
 const engine = new Engine(store, config);
 const { app, closeStreams } = createApp(config, store, engine);
 const server = app.listen(config.PORT, config.HOST, () =>
-  console.log("IdleCast 1.1.3 is ready"),
+  console.log(`IdleCast ${APP_VERSION} is ready`),
 );
 let shuttingDown = false;
 async function shutdown() {
   if (shuttingDown) return;
   shuttingDown = true;
-  closeStreams();
-  server.close();
-  await engine.close();
-  store.close();
-  await lock.close();
-  await unlink(lockPath);
-  process.exit(0);
+  const serverClosed = new Promise<void>((resolve) =>
+    server.close(() => resolve()),
+  );
+  try {
+    await closeStreams();
+    await engine.close();
+    await serverClosed;
+    store.close();
+    await lock.close();
+    await unlink(lockPath);
+    process.exit(0);
+  } catch (error) {
+    console.error("IdleCast shutdown failed", error);
+    process.exit(1);
+  }
 }
 process.on("SIGTERM", () => void shutdown());
 process.on("SIGINT", () => void shutdown());

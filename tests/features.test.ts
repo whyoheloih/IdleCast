@@ -171,7 +171,7 @@ test("credentials API authenticates, encrypts, applies immediately, persists and
       32,
     );
   } finally {
-    closeStreams();
+    await closeStreams();
     await engine.close();
     await new Promise<void>((r) => server.close(() => r()));
     db.close();

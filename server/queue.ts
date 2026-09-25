@@ -316,11 +316,22 @@ export function prepareQueue(
           canFollowInShuffledQueue(previous, blocks[index][0]),
         );
         if (valid.length) candidates = valid;
-        const opposite = candidates.filter(
-          (index) =>
-            isLongVideo(blocks[index][0]) !== isLongVideo(previous),
-        );
-        if (opposite.length) candidates = opposite;
+        // A 3+ hour item needs the full preceding 2+ hour slot for its
+        // download. Consume that prepared pairing before category alternation
+        // can spend the lead slot on another candidate.
+        const requiresLead = canLeadLongDownload(previous)
+          ? candidates.filter((index) =>
+              needsLongDownloadLead(blocks[index][0]),
+            )
+          : [];
+        if (requiresLead.length) candidates = requiresLead;
+        else {
+          const opposite = candidates.filter(
+            (index) =>
+              isLongVideo(blocks[index][0]) !== isLongVideo(previous),
+          );
+          if (opposite.length) candidates = opposite;
+        }
       }
       const minimum = Math.min(
         ...candidates.map((index) => blocks[index][0].playCount ?? 0),

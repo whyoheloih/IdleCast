@@ -28,6 +28,7 @@ import {
   Terminal,
 } from "lucide-react";
 import type { Settings } from "../server/config";
+import { APP_VERSION } from "../server/version";
 import type { StoredItem } from "../server/db";
 import { OverlayEditor } from "./OverlayEditor";
 import { Credentials } from "./Credentials";
@@ -266,7 +267,7 @@ function App() {
             <span className="brand-icon">
               <Radio />
             </span>
-            IdleCast<span className="version">1.1.3</span>
+            IdleCast<span className="version">{APP_VERSION}</span>
           </div>
           <h1>
             Your playlist.
@@ -350,7 +351,7 @@ function App() {
           >
             <LogOut size={16} /> Sign out
           </button>
-          <small>IdleCast v1.1.3</small>
+          <small>IdleCast v{APP_VERSION}</small>
         </div>
       </aside>
       <main>

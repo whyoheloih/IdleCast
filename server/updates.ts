@@ -3,6 +3,18 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.1.4",
+    date: "Sep 24, 2026",
+    title: "Reliability and code audit",
+    items: [
+      "Service restarts preserve and automatically resume broadcast intent",
+      "Standby preparation no longer overwrites the active title and date",
+      "Three-hour videos retain their required two-hour download lead",
+      "Shutdown now awaits preview and HTTP resource cleanup",
+      "Repeated standby failures are logged at a bounded rate",
+    ],
+  },
+  {
     version: "1.1.3",
     date: "Sep 24, 2026",
     title: "Fast livestream transition recovery",

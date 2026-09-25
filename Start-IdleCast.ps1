@@ -21,7 +21,7 @@ const headers={Origin:origin,'Content-Type':'application/json'};
 const login=await fetch('http://127.0.0.1:3000/api/login',{method:'POST',headers,body:JSON.stringify({password:process.env.ADMIN_PASSWORD})});
 if(!login.ok)throw Error('Could not authenticate to stop IdleCast');
 const cookie=login.headers.get('set-cookie').split(';')[0];
-const stop=await fetch('http://127.0.0.1:3000/api/stop',{method:'POST',headers:{...headers,Cookie:cookie}});
+const stop=await fetch('http://127.0.0.1:3000/api/stop',{method:'POST',headers:{...headers,Cookie:cookie},body:JSON.stringify({preserveDesired:true})});
 if(!stop.ok)throw Error('Could not stop playback');
 '@
     & $nodePath --input-type=module -e $stopCode
