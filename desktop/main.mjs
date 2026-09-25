@@ -211,6 +211,7 @@ function createWindow() {
     minWidth: 980,
     minHeight: 680,
     backgroundColor: "#101216",
+    icon: path.join(HERE, "icon.png"),
     autoHideMenuBar: true,
     show: false,
     webPreferences: {
@@ -418,10 +419,7 @@ function configureAutoUpdater() {
 }
 
 function createTray() {
-  const cat = app.isPackaged
-    ? packagedResource("idlecast", "media", "loading-cat.gif")
-    : path.join(PROJECT_ROOT, "media", "loading-cat.gif");
-  let icon = nativeImage.createFromPath(cat);
+  let icon = nativeImage.createFromPath(path.join(HERE, "icon.png"));
   if (!icon.isEmpty()) icon = icon.resize({ width: 18, height: 18 });
   tray = new Tray(icon);
   tray.setToolTip("IdleCast");

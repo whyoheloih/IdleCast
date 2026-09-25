@@ -3,6 +3,16 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.2.2",
+    date: "Sep 25, 2026",
+    title: "IdleCast application icon",
+    items: [
+      "New blue-and-white lowercase i mark with an infinity symbol",
+      "Icon embedded in the Windows executable and installer",
+      "Matching window, taskbar, Start menu, desktop shortcut, and tray icon",
+    ],
+  },
+  {
     version: "1.2.1",
     date: "Sep 25, 2026",
     title: "Automatic desktop updates",
