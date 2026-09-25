@@ -8,6 +8,7 @@ import {
   nativeImage,
   shell,
 } from "electron";
+import updater from "electron-updater";
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
@@ -22,6 +23,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ORIGIN = "http://localhost:3000";
+const RELEASES_URL = "https://github.com/whyoheloih/IdleCast/releases/latest";
+const UPDATE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const { autoUpdater } = updater;
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const PROJECT_ROOT = path.resolve(HERE, "..");
 let mainWindow;
@@ -29,6 +33,9 @@ let tray;
 let quitting = false;
 let backendStartedByDesktop = false;
 let dashboardPassword = "";
+let updateStatus = "Check for updates";
+let updateBusy = false;
+let updatePromptShown = false;
 const shellLog = path.join(app.getPath("userData"), "desktop-shell.log");
 function logShell(message, error) {
   const detail =
@@ -262,6 +269,11 @@ function refreshTrayMenu() {
           refreshTrayMenu();
         },
       },
+      {
+        label: updateStatus,
+        enabled: !updateBusy,
+        click: () => void checkForUpdates(true),
+      },
       ...(dashboardPassword
         ? [
             {
@@ -282,6 +294,127 @@ function refreshTrayMenu() {
       },
     ]),
   );
+}
+
+function setUpdateStatus(status, busy = false) {
+  updateStatus = status;
+  updateBusy = busy;
+  refreshTrayMenu();
+}
+
+async function checkForUpdates(manual = false) {
+  if (!app.isPackaged) {
+    if (manual)
+      await dialog.showMessageBox({
+        type: "info",
+        title: "IdleCast updates",
+        message: "Automatic updates are available in the installed app.",
+      });
+    return;
+  }
+  if (process.env.PORTABLE_EXECUTABLE_FILE) {
+    setUpdateStatus("Download the newest installer");
+    if (manual) await shell.openExternal(RELEASES_URL);
+    return;
+  }
+  if (updateBusy) return;
+  setUpdateStatus("Checking for updates…", true);
+  try {
+    await autoUpdater.checkForUpdates();
+  } catch (error) {
+    logShell("Update check failed", error);
+    setUpdateStatus("Update check failed — retry");
+    if (manual)
+      await dialog.showMessageBox({
+        type: "error",
+        title: "IdleCast update check failed",
+        message: error instanceof Error ? error.message : String(error),
+      });
+  }
+}
+
+async function stopBackendForUpdate() {
+  const { runtime } = desktopRuntime();
+  const ownerFile = path.join(runtime, "data", "owner.pid");
+  if (!existsSync(ownerFile)) return;
+  const pid = Number(readFileSync(ownerFile, "utf8").trim());
+  if (!Number.isSafeInteger(pid) || pid <= 0 || pid === process.pid) return;
+  logShell(`Stopping localhost backend ${pid} for desktop update`);
+  try {
+    process.kill(pid, "SIGTERM");
+  } catch (error) {
+    logShell("Could not stop localhost backend for update", error);
+    return;
+  }
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline) {
+    if (!(await ping())) return;
+    await new Promise((resolve) => setTimeout(resolve, 250));
+  }
+  logShell("Localhost backend did not stop before update");
+}
+
+async function installDownloadedUpdate() {
+  setUpdateStatus("Installing update…", true);
+  await stopBackendForUpdate();
+  quitting = true;
+  autoUpdater.quitAndInstall(false, true);
+}
+
+function configureAutoUpdater() {
+  if (!app.isPackaged) return;
+  if (process.env.PORTABLE_EXECUTABLE_FILE) {
+    setUpdateStatus("Download the newest installer");
+    return;
+  }
+  autoUpdater.autoDownload = true;
+  autoUpdater.autoInstallOnAppQuit = true;
+  autoUpdater.on("checking-for-update", () => {
+    logShell("Checking for desktop update");
+    setUpdateStatus("Checking for updates…", true);
+  });
+  autoUpdater.on("update-available", (info) => {
+    logShell(`Downloading desktop update ${info.version}`);
+    setUpdateStatus(`Downloading update v${info.version}…`, true);
+  });
+  autoUpdater.on("download-progress", (progress) => {
+    setUpdateStatus(
+      `Downloading update… ${Math.floor(progress.percent)}%`,
+      true,
+    );
+  });
+  autoUpdater.on("update-not-available", () => {
+    logShell("Desktop app is up to date");
+    setUpdateStatus("IdleCast is up to date");
+  });
+  autoUpdater.on("error", (error) => {
+    logShell("Desktop updater error", error);
+    setUpdateStatus("Update check failed — retry");
+  });
+  autoUpdater.on("update-downloaded", (info) => {
+    logShell(`Desktop update ${info.version} downloaded`);
+    setUpdateStatus(`Update v${info.version} ready — restart`);
+    if (updatePromptShown) return;
+    updatePromptShown = true;
+    void dialog
+      .showMessageBox({
+        type: "info",
+        title: "IdleCast update ready",
+        message: `IdleCast v${info.version} has been downloaded.`,
+        detail:
+          "Restart IdleCast to install it. The localhost service and stream will briefly reconnect on the updated version.",
+        buttons: ["Restart and install", "Later"],
+        defaultId: 0,
+        cancelId: 1,
+      })
+      .then(({ response }) => {
+        updatePromptShown = false;
+        if (response !== 0) return;
+        void installDownloadedUpdate();
+      });
+  });
+  setTimeout(() => void checkForUpdates(), 10000).unref();
+  setInterval(() => void checkForUpdates(), UPDATE_INTERVAL_MS).unref();
 }
 
 function createTray() {
@@ -314,6 +447,7 @@ else {
       logShell("Desktop window created");
       createTray();
       logShell("Tray created");
+      configureAutoUpdater();
       if (dashboardPassword) {
         clipboard.writeText(dashboardPassword);
         await dialog.showMessageBox({

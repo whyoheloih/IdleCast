@@ -3,6 +3,18 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.2.1",
+    date: "Sep 25, 2026",
+    title: "Automatic desktop updates",
+    items: [
+      "Installed desktop apps check GitHub Releases automatically every six hours",
+      "New versions download in the background with progress shown in the tray",
+      "A restart prompt appears when an update is ready to install",
+      "Manual update checks are available from the IdleCast tray menu",
+      "Portable builds link to the newest installer because they cannot safely replace themselves",
+    ],
+  },
+  {
     version: "1.2.0",
     date: "Sep 25, 2026",
     title: "Windows desktop application",
@@ -93,4 +105,3 @@ export const updateHistory = [
     ],
   },
 ] as const;
-

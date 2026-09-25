@@ -1,6 +1,6 @@
 {
   "name": "idlecast",
-  "version": "1.2.0",
+  "version": "1.2.1",
   "private": true,
   "type": "module",
   "engines": {
@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.13.0",
+    "electron-updater": "^6.8.9",
     "express": "^5.1.0",
     "lucide-react": "^0.468.0",
     "react": "^19.1.0",
@@ -99,7 +100,15 @@
     },
     "portable": {
       "artifactName": "IdleCast-Portable-${version}-${arch}.${ext}"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "whyoheloih",
+        "repo": "IdleCast",
+        "releaseType": "release"
+      }
+    ]
   },
   "description": "A self-hosted 24/7 YouTube and Twitch playlist broadcaster.",
   "author": "IdleCast"
