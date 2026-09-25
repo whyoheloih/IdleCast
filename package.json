@@ -1,6 +1,6 @@
 {
   "name": "idlecast",
-  "version": "1.1.5",
+  "version": "1.2.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -12,7 +12,10 @@
     "start": "tsx server/index.ts",
     "test": "tsx --test tests/*.test.ts",
     "check": "tsc --noEmit",
-    "test:browser": "tsx tests/browser.e2e.ts"
+    "test:browser": "tsx tests/browser.e2e.ts",
+    "build:server": "esbuild server/index.ts --bundle --platform=node --format=esm --target=node22 --outfile=dist-server/index.mjs",
+    "desktop:dev": "pnpm build && electron .",
+    "desktop:dist": "pnpm build && pnpm build:server && node scripts/prepare-desktop.mjs && node scripts/build-desktop.mjs"
   },
   "dependencies": {
     "@tanstack/react-virtual": "^3.13.0",
@@ -31,10 +34,73 @@
     "@types/react": "^19.1.0",
     "@types/react-dom": "^19.1.0",
     "@vitejs/plugin-react": "^5.0.0",
+    "electron": "^44.4.5",
+    "electron-builder": "^26.15.3",
+    "esbuild": "^0.28.2",
     "prettier": "^3.9.6",
     "tailwindcss": "^4.1.0",
     "typescript": "^5.9.0",
     "vite": "^7.1.0"
   },
-  "packageManager": "pnpm@11.19.0"
+  "packageManager": "pnpm@11.19.0",
+  "main": "desktop/main.mjs",
+  "build": {
+    "appId": "com.idlecast.desktop",
+    "productName": "IdleCast",
+    "asar": true,
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "desktop/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "dist",
+        "to": "idlecast/dist"
+      },
+      {
+        "from": "media/loading-cat.gif",
+        "to": "idlecast/media/loading-cat.gif"
+      },
+      {
+        "from": "dist-server/index.mjs",
+        "to": "server/index.mjs"
+      },
+      {
+        "from": "desktop-resources/tools",
+        "to": "tools"
+      }
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "signExecutable": false
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "artifactName": "IdleCast-Setup-${version}-${arch}.${ext}"
+    },
+    "portable": {
+      "artifactName": "IdleCast-Portable-${version}-${arch}.${ext}"
+    }
+  },
+  "description": "A self-hosted 24/7 YouTube and Twitch playlist broadcaster.",
+  "author": "IdleCast"
 }

@@ -3,3 +3,6 @@ dist/
 data/
 .env
 *.log
+dist-server/
+desktop-resources/
+release/

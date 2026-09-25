@@ -6,7 +6,7 @@ import { Engine } from "./engine.js";
 import { createApp } from "./app.js";
 import { APP_VERSION } from "./version.js";
 try {
-  process.loadEnvFile();
+  process.loadEnvFile(process.env.IDLECAST_ENV_FILE || undefined);
 } catch {}
 const config = readConfig(process.env);
 await mkdir(config.DATA_DIR, { recursive: true, mode: 0o700 });

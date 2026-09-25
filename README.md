@@ -19,6 +19,23 @@ IdleCast uses the **official YouTube Data API for metadata and ordering only**. 
 - Single-admin authentication, hashed sessions, origin checks, login throttling, strict configuration validation, and masked credentials.
 - Docker deployment, bounded container logs, unit/API tests, real FFmpeg integration tests, and browser tests.
 
+## Windows desktop application
+
+IdleCast can run as a normal Windows application while keeping the same [http://localhost:3000](http://localhost:3000) dashboard available. Both views use one backend, database, queue, download cache, and encoder process.
+
+Build both the installer and portable application on Windows:
+
+```powershell
+pnpm desktop:dist
+```
+
+The finished files are written to `release` by default. On this workstation they are written to `E:\IdleCast\releases` to conserve C-drive space:
+
+- `IdleCast-Setup-<version>-x64.exe` installs IdleCast with Start-menu and desktop shortcuts.
+- `IdleCast-Portable-<version>-x64.exe` runs without installation.
+
+The desktop app connects to an existing IdleCast process on port 3000 when one is already running. On this workstation it automatically reuses `E:\IdleCast\repo`, including its settings, credentials, cookies, cache, and media. A fresh installation creates a private runtime directory and copies its generated dashboard password to the clipboard on first launch. Closing the window minimizes IdleCast to the notification area; quitting the desktop shell leaves a desktop-started backend running so an unattended broadcast and localhost dashboard are not interrupted.
+
 ## Quick start with Docker
 
 Requirements: Linux host with Docker Engine and Compose, a YouTube Data API v3 key, and at least one destination stream key. Allow outbound HTTPS and RTMPS. Use a public/unlisted playlist containing videos you are authorized to rebroadcast.

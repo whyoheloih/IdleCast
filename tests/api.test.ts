@@ -20,6 +20,9 @@ test("admin authentication, write-origin checks, secret exclusion, validation, a
   await new Promise<void>((r) => server.once("listening", r));
   const base = "http://127.0.0.1:" + (server.address() as any).port;
   try {
+    const ping = await fetch(base + "/api/ping");
+    assert.equal(ping.status, 200);
+    assert.equal((await ping.json()).application, "IdleCast");
     assert.equal((await fetch(base + "/api/state")).status, 401);
     assert.equal(
       (

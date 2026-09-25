@@ -172,7 +172,11 @@ export function standby(
           s,
           path.join(c.DATA_DIR, "standby-overlay"),
         );
-        const cat = path.resolve("media", "loading-cat.gif");
+        const cat = path.resolve(
+          process.env.IDLECAST_APP_ROOT ?? ".",
+          "media",
+          "loading-cat.gif",
+        );
         const thumbnail = upNextThumbnailFile(c);
         const title = upNextTitleFile(c);
         const hasThumbnail = existsSync(thumbnail);

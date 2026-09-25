@@ -3,6 +3,18 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.2.0",
+    date: "Sep 25, 2026",
+    title: "Windows desktop application",
+    items: [
+      "Installable and portable Windows applications alongside localhost access",
+      "One shared backend prevents duplicate encoders and stream processes",
+      "Desktop window minimizes to the tray while broadcasting continues",
+      "Existing E-drive settings, credentials, cookies, cache, and media are reused",
+      "FFmpeg, FFprobe, and yt-dlp are bundled into desktop releases",
+    ],
+  },
+  {
     version: "1.1.5",
     date: "Sep 24, 2026",
     title: "Clear playlist drag and drop",

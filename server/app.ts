@@ -56,6 +56,9 @@ export function createApp(c: Config, store: Store, engine: Engine) {
     next();
   });
   app.use(express.json({ limit: "32kb" }));
+  app.get("/api/ping", (_req, res) =>
+    res.json({ application: "IdleCast", version: APP_VERSION }),
+  );
   const cookie = (req: express.Request) =>
     req.headers.cookie
       ?.split(";")
@@ -116,6 +119,10 @@ export function createApp(c: Config, store: Store, engine: Engine) {
     res.json({ ok: true });
   });
   app.use("/api", (req, res, next) => {
+    if (req.path === "/ping") {
+      next();
+      return;
+    }
     const token = cookie(req);
     if (
       !/^[a-f0-9]{64}$/.test(token) ||
@@ -491,9 +498,12 @@ export function createApp(c: Config, store: Store, engine: Engine) {
     });
   });
   app.use("/api", (_req, res) => res.status(404).json({ error: "Not found" }));
-  app.use(express.static(path.resolve("dist"), { index: false }));
+  const applicationRoot = path.resolve(process.env.IDLECAST_APP_ROOT ?? ".");
+  app.use(
+    express.static(path.join(applicationRoot, "dist"), { index: false }),
+  );
   app.get("/{*path}", (_req, res) =>
-    res.sendFile(path.resolve("dist/index.html")),
+    res.sendFile(path.join(applicationRoot, "dist", "index.html")),
   );
   app.use(
     (
