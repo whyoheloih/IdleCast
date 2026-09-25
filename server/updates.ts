@@ -3,6 +3,16 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.2.3",
+    date: "Sep 25, 2026",
+    title: "E-drive update storage",
+    items: [
+      "Desktop update downloads and temporary installer files use E-drive storage when available",
+      "Desktop logs, cache, and new-install runtime data avoid the low-space C drive",
+      "Existing E-drive settings and media continue to be reused",
+    ],
+  },
+  {
     version: "1.2.2",
     date: "Sep 25, 2026",
     title: "IdleCast application icon",

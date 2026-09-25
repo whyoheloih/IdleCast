@@ -36,6 +36,28 @@ let dashboardPassword = "";
 let updateStatus = "Check for updates";
 let updateBusy = false;
 let updatePromptShown = false;
+
+function configureDesktopStorage() {
+  if (process.platform !== "win32") return;
+  const configured = process.env.IDLECAST_HOME;
+  const preferredRoot = configured
+    ? path.dirname(path.resolve(configured))
+    : existsSync("E:\\IdleCast")
+      ? "E:\\IdleCast"
+      : null;
+  if (!preferredRoot) return;
+  const userData = path.join(preferredRoot, "desktop-data");
+  const cache = path.join(preferredRoot, "desktop-cache");
+  const temporary = path.join(preferredRoot, "Temp");
+  for (const directory of [userData, cache, temporary])
+    mkdirSync(directory, { recursive: true });
+  app.setPath("userData", userData);
+  app.setPath("cache", cache);
+  process.env.TEMP = temporary;
+  process.env.TMP = temporary;
+}
+configureDesktopStorage();
+
 const shellLog = path.join(app.getPath("userData"), "desktop-shell.log");
 function logShell(message, error) {
   const detail =
