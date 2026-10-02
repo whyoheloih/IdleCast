@@ -12,7 +12,7 @@ import path from "node:path";
 import os from "node:os";
 import { readConfig, defaults } from "../server/config.js";
 import { Store } from "../server/db.js";
-import { Engine } from "../server/engine.js";
+import { Engine, countsTowardFailureHistory } from "../server/engine.js";
 import { runCapture, delay } from "../server/process.js";
 import {
   overlay,
@@ -30,6 +30,12 @@ const font =
     ? "C:/Windows/Fonts/arial.ttf"
     : "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf";
 const signal = () => new AbortController().signal;
+test("systemic download outages do not poison per-video failure history", () => {
+  assert.equal(countsTowardFailureHistory("YouTube requires account verification for this request"), false);
+  assert.equal(countsTowardFailureHistory("YouTube rate limit reached; retry later"), false);
+  assert.equal(countsTowardFailureHistory("Media file cannot be decoded"), true);
+});
+
 test("FFmpeg overlay has no background box and has outlined text with an opaque square avatar", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "idlecast-overlay-"));
   try {

@@ -44,6 +44,12 @@ import {
   writeLoadingItem,
   writeLoadingStatus,
 } from "./encoder.js";
+export function countsTowardFailureHistory(message: string) {
+  return !/account verification|rate limit|media disk is full|required media executable|executable path|download stalled|media operation timed out|cache storage is unavailable/i.test(
+    message,
+  );
+}
+
 export type OutputState = {
   status:
     | "disabled"
@@ -1142,6 +1148,7 @@ export class Engine extends EventEmitter {
     this.event();
   }
   private recordFailure(item: StoredItem, message: string) {
+    if (!countsTowardFailureHistory(message)) return;
     this.store.fail(item.id, message);
     const history = this.store.get<Record<string, number>>(
       "failureHistory",
