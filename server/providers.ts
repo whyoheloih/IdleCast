@@ -21,7 +21,7 @@ export type PlaylistItem = {
   isShort?: boolean;
   playCount?: number;
   selectionPenalty?: number;
-  liveStatus?: "none" | "upcoming" | "past";
+  liveStatus?: "none" | "live" | "upcoming" | "past";
 };
 export interface PlaylistProvider {
   fetch(playlistId: string, signal: AbortSignal): Promise<PlaylistItem[]>;

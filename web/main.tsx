@@ -30,7 +30,9 @@ import {
   Database,
   ArrowLeft,
 } from "lucide-react";
-import { FILTER_MIN_YEAR, type Settings } from "../server/config";
+import type { Settings } from "../server/config";
+
+const FILTER_MIN_YEAR = 2011;
 import { APP_VERSION } from "../server/version";
 import type { StoredItem } from "../server/db";
 import { OverlayEditor } from "./OverlayEditor";

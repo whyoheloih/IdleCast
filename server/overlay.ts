@@ -25,7 +25,7 @@ export const countdownAnimationFiles = [
   "GWGMCzmPeO9za9hq5Y.gif",
   "x73W03Q8lfTBfeGcY7.gif",
   "65VBy9Ccvyww9or9IR.gif",
-] as const;
+];
 
 export type CountdownAnimationSelection = {
   file: string;
