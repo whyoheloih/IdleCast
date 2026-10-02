@@ -32,7 +32,11 @@ import {
   LONG_VIDEO_SECONDS,
 } from "./queue.js";
 import { playlistId as parsePlaylistId } from "./config.js";
-import { overlay, overlayLayout } from "./overlay.js";
+import {
+  overlay,
+  overlayLayout,
+  selectCountdownAnimation,
+} from "./overlay.js";
 import {
   audioSampleRate,
   encodeArgs,
@@ -900,6 +904,13 @@ export class Engine extends EventEmitter {
             ? `Audio input: ${audio.codec_name}, ${audio.sample_rate} Hz, ${audio.channels} channels; output AAC ${outputAudioRate} Hz stereo`
             : `Video has no audio; using ${outputAudioRate} Hz stereo silence`,
         );
+        const countdownHistory = this.store.get<string[]>(
+          "countdownAnimationHistory",
+          [],
+        );
+        const countdownAnimation = await selectCountdownAnimation(
+          countdownHistory,
+        );
         const ov = await overlay(
           this.config,
           {
@@ -911,6 +922,7 @@ export class Engine extends EventEmitter {
             item.videoId
           ],
           { offset, total: duration },
+          countdownAnimation,
         );
         clipSignal.throwIfAborted();
         if (idle) {
@@ -951,6 +963,14 @@ export class Engine extends EventEmitter {
           ),
         ];
         const child = launch(this.config.FFMPEG_PATH, args, clipSignal);
+        if (countdownAnimation) {
+          this.store.set(
+            "countdownAnimationHistory",
+            [...countdownHistory, countdownAnimation.name].slice(-3),
+          );
+          if (countdownAnimation.rareRepeat)
+            this.event(`Transition ${transition}: rare 8% countdown GIF repeat selected`);
+        }
         child.once("error", (error) =>
           this.event(`Transition ${transition}: FFmpeg error — ${error.message}`, "error"),
         );
@@ -1024,6 +1044,7 @@ export class Engine extends EventEmitter {
                         undefined,
                         publishedAt,
                         { offset: this.elapsed, total: duration },
+                        countdownAnimation,
                       ).then(() =>
                         this.event("Restored stale title/date overlay", "warn"),
                       );

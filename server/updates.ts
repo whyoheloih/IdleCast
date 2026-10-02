@@ -3,6 +3,17 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.4.1",
+    date: "Oct 1, 2026",
+    title: "Animated countdown rotation",
+    items: [
+      "Seventeen supplied animations can appear at random in a small looping window beneath the final-ten-second countdown",
+      "The animation uses the same visual-only FFmpeg overlay as the countdown and cannot request a video transition",
+      "The last three animations are excluded from normal selection, with an 8% rare-repeat chance marked by a gold countdown outline",
+      "Animation history persists across playback and desktop restarts, while decoding is deferred until the final ten seconds",
+    ],
+  },
+  {
     version: "1.4.0",
     date: "Oct 1, 2026",
     title: "Safer transitions and range filters",

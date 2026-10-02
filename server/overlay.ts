@@ -7,6 +7,63 @@ export function filterPath(value: string) {
   return value.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "'\\''");
 }
 
+export const countdownAnimationFiles = [
+  "xTkcEQACH24SMPxIQg.gif",
+  "8DzAsTSmvgOCFKMex9.gif",
+  "J3bDx6An0ISsFBYeDE.gif",
+  "atQF1zaSGq8s8.gif",
+  "V7jkATiqn3mRie2LI2.gif",
+  "ppSjX2iP9Ec1ExJRsV.gif",
+  "vyxos9QyesGZalcdX6.gif",
+  "YRrEvx9zTRkJgHFWn9.gif",
+  "TPmPW6VBIBVNCvQQTj.gif",
+  "HyovGvqQ7L7T6dgxZ9.gif",
+  "opDRL3H2A9iLNuvbOv.gif",
+  "QowuvpSus8Y9qnlle8.gif",
+  "okfvUCpgArv3y.gif",
+  "hjvBoWTABwwNi.gif",
+  "GWGMCzmPeO9za9hq5Y.gif",
+  "x73W03Q8lfTBfeGcY7.gif",
+  "65VBy9Ccvyww9or9IR.gif",
+] as const;
+
+export type CountdownAnimationSelection = {
+  file: string;
+  name: string;
+  rareRepeat: boolean;
+};
+
+export async function selectCountdownAnimation(
+  history: readonly string[] = [],
+  random: () => number = Math.random,
+): Promise<CountdownAnimationSelection | null> {
+  const root = path.resolve(
+    process.env.IDLECAST_APP_ROOT ?? ".",
+    "media",
+    "countdown",
+  );
+  const available: Array<{ name: string; file: string }> = [];
+  for (const name of countdownAnimationFiles)
+    try {
+      available.push({ name, file: await containedFile(root, name) });
+    } catch {}
+  if (!available.length) return null;
+
+  const recent = new Set(history.slice(-3));
+  const repeatCandidates = available.filter(({ name }) => recent.has(name));
+  const rareRepeat = repeatCandidates.length > 0 && random() < .08;
+  const freshCandidates = available.filter(({ name }) => !recent.has(name));
+  const candidates = rareRepeat
+    ? repeatCandidates
+    : freshCandidates.length
+      ? freshCandidates
+      : available;
+  return {
+    ...candidates[Math.floor(random() * candidates.length) % candidates.length],
+    rareRepeat,
+  };
+}
+
 export function overlayLayout(s: Settings, publishedAt = "") {
   const { margin, fontSize, avatarSize } = s.overlay;
   const hasAvatar = !!s.overlay.avatar;
@@ -81,6 +138,7 @@ export async function overlay(
   directory = path.join(c.DATA_DIR, "overlay"),
   publishedAt = "",
   timeline?: { offset: number; total: number },
+  animationSelection?: CountdownAnimationSelection | null,
 ): Promise<{ inputs: string[]; filter: string }> {
   const base = `[0:v:0]scale=${s.width}:${s.height}:force_original_aspect_ratio=decrease,pad=${s.width}:${s.height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${s.fps},format=yuv420p[base]`;
   if (!s.overlay.enabled)
@@ -94,6 +152,13 @@ export async function overlay(
   const avatar = s.overlay.avatar
     ? await containedFile(path.join(c.MEDIA_DIR, "avatars"), s.overlay.avatar)
     : "";
+  const selectedAnimation = timeline
+    ? animationSelection ?? (await selectCountdownAnimation())
+    : null;
+  const countdownAnimation = selectedAnimation?.file ?? "";
+  let animationInputs: string[] = [];
+  const animationIndex = 2;
+  const avatarIndex = 2 + (countdownAnimation ? 1 : 0);
   const style = `fontfile='${filterPath(c.FONT_FILE)}':expansion=none:fontcolor=white:bordercolor=black:borderw=${Math.max(1, Math.round(layout.fontSize / 12))}`;
   const timelineText = timeline
     ? `%{eif\\:floor((t+${Math.max(0, timeline.offset)})/60)\\:d\\:2}\\:%{eif\\:floor(t+${Math.max(0, timeline.offset)})-60*floor((t+${Math.max(0, timeline.offset)})/60)\\:d\\:2}/${formatTimeline(timeline.total).replace(/:/g, "\\:")}`
@@ -101,22 +166,39 @@ export async function overlay(
   const countdownStart = timeline
     ? Math.max(0, timeline.total - timeline.offset - 10)
     : 0;
+  const countdownEnd = timeline
+    ? Math.max(countdownStart, timeline.total - timeline.offset)
+    : 0;
+  animationInputs = countdownAnimation
+    ? ["-stream_loop", "-1", "-itsoffset", String(countdownStart), "-i", countdownAnimation]
+    : [];
+  const countdownStyle = style
+    .replace("expansion=none", "expansion=normal")
+    .replace("bordercolor=black", selectedAnimation?.rareRepeat ? "bordercolor=0xFFD700" : "bordercolor=black");
   const countdown = timeline
-    ? `,drawtext=${style.replace("expansion=none", "expansion=normal")}:text='Next video in %{eif\\:max(0\\,ceil(${timeline.total - timeline.offset}-t))\\:d}':fontsize=${Math.max(40, Math.round(s.height / 16))}:x=(w-tw)/2:y=${Math.max(28, Math.round(s.height * .06))}:enable='between(t\\,${countdownStart}\\,${Math.max(countdownStart, timeline.total - timeline.offset)})':alpha='if(lt(t\\,${countdownStart + .6})\\,(t-${countdownStart})/.6\\,1)'`
+    ? `,drawtext=${countdownStyle}:text='Next video in %{eif\\:max(0\\,ceil(${timeline.total - timeline.offset}-t))\\:d}':fontsize=${Math.max(40, Math.round(s.height / 16))}:x=(w-tw)/2:y=${Math.max(28, Math.round(s.height * .06))}:enable='between(t\\,${countdownStart}\\,${countdownEnd})':alpha='if(lt(t\\,${countdownStart + .6})\\,(t-${countdownStart})/.6\\,1)'`
     : "";
   const draw = `drawtext=${style}:textfile='${filterPath(textFile)}':reload=1:fontsize=${layout.fontSize}:line_spacing=${Math.ceil(layout.fontSize * .25)}:x=${layout.textX}:y=${layout.textY}` +
     (layout.date ? `,drawtext=${style}:textfile='${filterPath(dateFile)}':reload=1:fontsize=${layout.dateSize}:x=${layout.textX}:y=${layout.textY + layout.dateOffset}` : "") +
     (timelineText ? `,drawtext=${style.replace("expansion=none", "expansion=normal")}:text='${timelineText}':fontsize=${Math.max(layout.dateSize + 5, 18)}:x=w-tw-${s.overlay.margin}:y=h-th-${s.overlay.margin}` : "") + countdown;
-  const box = `[base]null[box]`;
+  const animationWidth = Math.round(s.width * .22) & ~1;
+  const animationHeight = Math.round(s.height * .20) & ~1;
+  const animationY = Math.max(92, Math.round(s.height * .17));
+  const box = countdownAnimation
+    ? `[${animationIndex}:v:0]scale=${animationWidth}:${animationHeight}:force_original_aspect_ratio=decrease:force_divisible_by=2,pad=${animationWidth}:${animationHeight}:(ow-iw)/2:(oh-ih)/2:color=0x101216,setsar=1[countdownAnimation];[base][countdownAnimation]overlay=x=(W-w)/2:y=${animationY}:shortest=0:eof_action=repeat:enable='between(t\\,${countdownStart}\\,${countdownEnd})'[box]`
+    : `[base]null[box]`;
   if (!avatar)
-    return { inputs: [], filter: base + ";" + box + ";[box]" + draw + "[v]" };
+    return {
+      inputs: animationInputs,
+      filter: base + ";" + box + ";[box]" + draw + "[v]",
+    };
   return {
-    inputs: ["-loop", "1", "-i", avatar],
+    inputs: [...animationInputs, "-loop", "1", "-i", avatar],
     filter:
       base +
       ";" +
       box +
-      `;[2:v:0]scale=iw*sar:ih,setsar=1,scale=${s.overlay.avatarSize}:${s.overlay.avatarSize}:force_original_aspect_ratio=increase,crop=${s.overlay.avatarSize}:${s.overlay.avatarSize},format=rgba[avatar];[box][avatar]overlay=x=${layout.avatarX}:y=${layout.avatarY}:shortest=1[withAvatar];[withAvatar]` +
+      `;[${avatarIndex}:v:0]scale=iw*sar:ih,setsar=1,scale=${s.overlay.avatarSize}:${s.overlay.avatarSize}:force_original_aspect_ratio=increase,crop=${s.overlay.avatarSize}:${s.overlay.avatarSize},format=rgba[avatar];[box][avatar]overlay=x=${layout.avatarX}:y=${layout.avatarY}:shortest=1[withAvatar];[withAvatar]` +
       draw +
       "[v]",
   };

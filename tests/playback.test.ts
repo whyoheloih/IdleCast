@@ -14,7 +14,12 @@ import { readConfig, defaults } from "../server/config.js";
 import { Store } from "../server/db.js";
 import { Engine } from "../server/engine.js";
 import { runCapture, delay } from "../server/process.js";
-import { overlay, formatTimeline } from "../server/overlay.js";
+import {
+  overlay,
+  formatTimeline,
+  countdownAnimationFiles,
+  selectCountdownAnimation,
+} from "../server/overlay.js";
 import {
   LocalMediaSource,
   type PlaylistItem,
@@ -60,12 +65,22 @@ test("FFmpeg overlay has no background box and has outlined text with an opaque 
     };
     assert.equal(formatTimeline(65), "01:05");
     assert.equal(formatTimeline(8 * 60 * 60), "480:00");
+    const history = countdownAnimationFiles.slice(0, 3);
+    const regular = await selectCountdownAnimation(history, () => .5);
+    assert.ok(regular && !history.includes(regular.name));
+    assert.equal(regular.rareRepeat, false);
+    const rareRepeat = await selectCountdownAnimation(history, () => 0);
+    assert.ok(rareRepeat && history.includes(rareRepeat.name));
+    assert.equal(rareRepeat.rareRepeat, true);
     const result = await overlay(c, settings, undefined, "", {
         offset: 65,
         total: 130,
-      }),
+      }, rareRepeat),
       output = path.join(root, "frame.rgb");
     assert.match(result.filter, /text=.*fontsize=21:x=w-tw-/);
+    assert.ok(result.inputs.some((value) => value.endsWith(".gif")));
+    assert.match(result.filter, /countdownAnimation/);
+    assert.match(result.filter, /bordercolor=0xFFD700/);
     await runCapture(
       "ffmpeg",
       [

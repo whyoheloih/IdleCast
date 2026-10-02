@@ -1,6 +1,6 @@
 {
   "name": "idlecast",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "private": true,
   "type": "module",
   "engines": {
@@ -64,6 +64,10 @@
       {
         "from": "media/loading-cat.gif",
         "to": "idlecast/media/loading-cat.gif"
+      },
+      {
+        "from": "media/countdown",
+        "to": "idlecast/media/countdown"
       },
       {
         "from": "dist-server/index.cjs",
