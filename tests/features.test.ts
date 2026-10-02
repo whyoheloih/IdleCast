@@ -203,8 +203,10 @@ test("custom filters group numbered series, override content limits, and preserv
     ...defaults,
     filters: {
       ...defaults.filters,
-      years: [2015],
-      durations: ["5to10"],
+      yearMin: 2015,
+      yearMax: 2015,
+      durationMinSeconds: 300,
+      durationMaxSeconds: 600,
       excludeRegionRestricted: true,
       maxEstimatedSizeGb: 1,
       maxFailures: 2,

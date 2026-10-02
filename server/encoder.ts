@@ -3,7 +3,7 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Config, Settings } from "./config.js";
 import type { PlaylistItem } from "./providers.js";
-import { launch, completion, delay } from "./process.js";
+import { launch, completion, delay, mediaFailure } from "./process.js";
 import { filterPath, overlay } from "./overlay.js";
 
 export function audioSampleRate(s: Settings): 44100 | 48000 {
@@ -137,16 +137,16 @@ export function standby(
   s: Settings,
   epoch: number,
   signal: AbortSignal,
-  onError: () => void,
+  onError: (reason?: string) => void,
 ) {
   const controller = new AbortController();
   const combined = AbortSignal.any([signal, controller.signal]);
   let lastErrorReport = 0;
-  const reportError = () => {
+  const reportError = (reason?: string) => {
     const now = Date.now();
-    if (now - lastErrorReport < 30000) return;
+    if (now - lastErrorReport < 15000) return;
     lastErrorReport = now;
-    onError();
+    onError(reason);
   };
   const task = (async () => {
     while (!combined.aborted) {
@@ -185,9 +185,9 @@ export function standby(
         ).length;
         const catIndex = 2 + overlayInputCount;
         const thumbnailIndex = catIndex + 1;
-        const catSize = Math.round(s.height * 0.25);
-        const thumbWidth = Math.round(s.width * 0.34);
-        const thumbHeight = Math.round(s.height * 0.38);
+        const catSize = Math.round(s.height * 0.25) & ~1;
+        const thumbWidth = Math.round(s.width * 0.34) & ~1;
+        const thumbHeight = Math.round(s.height * 0.38) & ~1;
         const statusSize = Math.max(22, Math.round(s.height / 34));
         const titleSize = Math.max(22, Math.round(s.height / 32));
         const border = Math.max(2, Math.round(statusSize / 12));
@@ -203,7 +203,7 @@ export function standby(
             thumbWidth +
             ":" +
             thumbHeight +
-            ":force_original_aspect_ratio=decrease,pad=" +
+            ":force_original_aspect_ratio=decrease:force_divisible_by=2,pad=" +
             thumbWidth +
             ":" +
             thumbHeight +
@@ -276,12 +276,18 @@ export function standby(
           combined,
         );
         child.stdout?.resume();
-        await completion(child);
+        const code = await completion(child);
         if (combined.aborted) break;
-        reportError();
-      } catch {
+        reportError(
+          code === 0
+            ? "standby producer ended unexpectedly"
+            : mediaFailure(child),
+        );
+      } catch (error) {
         if (combined.aborted) break;
-        reportError();
+        reportError(
+          error instanceof Error ? error.message : "standby producer failed",
+        );
       }
       await delay(5000, combined);
     }

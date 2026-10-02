@@ -163,18 +163,6 @@ export function estimatedDownloadGb(item: PlaylistItem, settings: Settings) {
   return (item.duration * (videoMbps + 0.16)) / 8 / 1000;
 }
 
-function durationBucket(seconds: number | null) {
-  if (seconds === null) return "";
-  if (seconds < 300) return "under5";
-  if (seconds < 600) return "5to10";
-  if (seconds < 1500) return "10to25";
-  if (seconds < 2400) return "25to40";
-  if (seconds < 3600) return "40to60";
-  if (seconds < 7200) return "1to2h";
-  if (seconds < 18000) return "2to5h";
-  return "5hplus";
-}
-
 function filterReasons(item: PlaylistItem, settings: Settings) {
   const reasons: string[] = [];
   const filters = settings.filters;
@@ -185,19 +173,18 @@ function filterReasons(item: PlaylistItem, settings: Settings) {
     )
   )
     reasons.push("title words");
-  if (filters.years.length) {
-    const year = Number(item.publishedAt?.slice(0, 4));
-    if (!filters.years.includes(year)) reasons.push("upload year");
-  }
+  const year = Number(item.publishedAt?.slice(0, 4));
+  const maximumYear = filters.yearMax ?? new Date().getFullYear();
+  if (!Number.isInteger(year) || year < filters.yearMin || year > maximumYear)
+    reasons.push("upload year");
+  if (item.liveStatus === "live") reasons.push("current livestream");
   if (item.liveStatus === "upcoming") reasons.push("upcoming livestream");
-  if (item.liveStatus === "live" && !filters.playLivestreams)
-    reasons.push("livestreams");
+  if (item.liveStatus === "past" && !filters.includePastLivestreams)
+    reasons.push("past livestream");
   if (
-    item.liveStatus !== "live" &&
-    filters.durations.length &&
-    !filters.durations.includes(
-      durationBucket(item.duration) as (typeof filters.durations)[number],
-    )
+    item.duration === null ||
+    item.duration < filters.durationMinSeconds ||
+    (filters.durationMaxSeconds !== null && item.duration > filters.durationMaxSeconds)
   )
     reasons.push("duration");
   if (!filters.includeShorts && item.isShort)
@@ -208,7 +195,6 @@ function filterReasons(item: PlaylistItem, settings: Settings) {
     reasons.push("not embeddable");
   const size = estimatedDownloadGb(item, settings);
   if (
-    item.liveStatus !== "live" &&
     filters.maxEstimatedSizeGb > 0 &&
     (size === null || size > filters.maxEstimatedSizeGb)
   )
@@ -279,7 +265,9 @@ export function prepareQueue(
   random = randomInt,
 ) {
   const detected = items.map((item) => {
-    const series = item.liveStatus === "live" ? null : detectSeries(item.title, settings.filters.seriesMode);
+    const series = ["live", "upcoming"].includes(item.liveStatus ?? "none")
+      ? null
+      : detectSeries(item.title, settings.filters.seriesMode);
     return {
       ...item,
       seriesKey: series?.key ?? "",
@@ -319,7 +307,8 @@ export function prepareQueue(
         reason === "regional restriction" ||
         reason === "not embeddable" ||
         reason === "YouTube Shorts" ||
-        reason === "livestreams" ||
+        reason === "current livestream" ||
+        reason === "past livestream" ||
         reason === "upcoming livestream",
     );
     const included =

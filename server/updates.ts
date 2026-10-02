@@ -3,6 +3,18 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.4.0",
+    date: "Oct 1, 2026",
+    title: "Safer transitions and range filters",
+    items: [
+      "Preloaded video changes no longer create a throwaway standby encoder, reducing FFmpeg and UDP churn at every transition",
+      "Transition ownership now protects newer playback from stale watchdog cleanup and logs preparation, activation, and producer failures",
+      "Include Past Livestreams replaces direct live playback; current and upcoming broadcasts always remain excluded",
+      "Upload year and video length filters now use shared dual-handle ranges in both Playlist and Settings",
+      "Downloaded Videos now keeps its full layout when empty, including sidebar guidance and Back to Playlist navigation",
+    ],
+  },
+  {
     version: "1.3.1",
     date: "Sep 25, 2026",
     title: "Update check on every launch",

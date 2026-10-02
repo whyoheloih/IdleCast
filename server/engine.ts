@@ -85,6 +85,7 @@ export class Engine extends EventEmitter {
   private activeSource: MediaSourceProvider | null = null;
   private queueRefreshPending = false;
   private activationGeneration = 0;
+  private transitionGeneration = 0;
   private metadataTimer: ReturnType<typeof setTimeout> | null = null;
   previewSource() {
     if (this.state !== "playing" || !this.currentMedia || !this.clip)
@@ -148,8 +149,7 @@ export class Engine extends EventEmitter {
       item.videoId === currentId ||
       this.bufferedIds.has(item.videoId) ||
       this.downloadStates.has(item.videoId) ||
-      this.cachedSizes.has(item.videoId) ||
-      (item.liveStatus === "live" && item.available),
+      this.cachedSizes.has(item.videoId),
     );
     const entries = visible.map((item) => {
       const prepared = this.preparedMedia.get(item.videoId);
@@ -163,10 +163,7 @@ export class Engine extends EventEmitter {
         seriesKey: item.seriesKey,
         seriesIndex: item.seriesIndex,
         current: item.videoId === currentId,
-        status:
-          item.liveStatus === "live" && item.videoId === currentId
-            ? "LIVE"
-            : activity?.status ?? (prepared || this.cachedSizes.has(item.videoId) ? "downloaded" : "queued"),
+        status: activity?.status ?? (prepared || this.cachedSizes.has(item.videoId) ? "downloaded" : "queued"),
         percent: activity?.percent ?? (prepared || this.cachedSizes.has(item.videoId) ? 100 : 0),
         attempt: activity?.attempt ?? 0,
         bytes: prepared?.size ?? activity?.bytes ?? this.cachedSizes.get(item.videoId) ?? 0,
@@ -606,11 +603,11 @@ export class Engine extends EventEmitter {
         ? new LocalMediaSource(this.config.MEDIA_DIR)
         : new ExperimentalYouTubeSource(this.config, undefined, s, {
             onDownload: (download) => {
-              this.download = download?.status === "live" ? null : download;
+              this.download = download;
               if (download) this.downloadStates.set(download.videoId, download);
               void writeLoadingStatus(
                 this.config,
-                download?.status === "live" ? null : download,
+                download,
               ).catch(() => {});
               if (download?.status === "retrying")
                 this.event(
@@ -649,7 +646,6 @@ export class Engine extends EventEmitter {
     ).filter((item) => {
       if (
         !item.available ||
-        item.liveStatus === "live" ||
         item.retryAt > Date.now() ||
         seen.has(item.videoId)
       )
@@ -861,17 +857,18 @@ export class Engine extends EventEmitter {
         continue;
       }
       const resume = item.id === saved?.id ? Math.max(0, saved.offset) : 0;
+      const previousVideoId = this.current?.videoId ?? "none";
+      const transition = ++this.transitionGeneration;
       this.current = item;
       this.elapsed = resume;
       this.state = "preparing";
-      this.event();
-      this.clip = new AbortController();
-      const clipSignal = AbortSignal.any([signal, this.clip.signal]);
+      this.event(`Transition ${transition} requested: ${previousVideoId} -> ${item.videoId}`);
+      const clipController = new AbortController();
+      this.clip = clipController;
+      const clipSignal = AbortSignal.any([signal, clipController.signal]);
       this.skipRequested = false;
       await writeLoadingItem(this.config, item).catch(() => {});
-      const idle = standby(this.config, s, epoch, clipSignal, () =>
-        this.event("Standby encoder failed; retry scheduled", "error"),
-      );
+      let idle: ReturnType<typeof standby> | null = null;
       let consumed = false;
       try {
         source.retain?.([...this.bufferedIds]);
@@ -880,24 +877,22 @@ export class Engine extends EventEmitter {
             item.title +
             ". The complete video is downloaded before playback.",
         );
-        const live = item.liveStatus === "live";
-        const prepared = live ? undefined : this.preparedMedia.get(item.videoId);
-        if (live && !source.resolveLive)
-          throw new Error("The selected media source cannot play livestreams");
-        const file = live
-          ? await source.resolveLive!(item, clipSignal)
-          : prepared?.file ?? (await source.resolve(item, clipSignal));
-        const info = live
-          ? { format: { duration: Number.MAX_SAFE_INTEGER }, streams: [
-              { codec_type: "video", codec_name: "live" },
-              { codec_type: "audio", codec_name: "live", sample_rate: String(audioSampleRate(s)), channels: 2 },
-            ] }
-          : prepared?.info ?? (await this.probeMedia(file, clipSignal));
+        const prepared = this.preparedMedia.get(item.videoId);
+        if (!prepared) {
+          this.event(`Transition ${transition}: source is not preloaded; standby fallback started`, "warn");
+          idle = standby(this.config, s, epoch, clipSignal, (reason) =>
+            this.event(
+              `Transition ${transition}: standby encoder failed${reason ? ` — ${reason}` : ""}; retry scheduled`,
+              "error",
+            ),
+          );
+        }
+        const file = prepared?.file ?? (await source.resolve(item, clipSignal));
+        const info = prepared?.info ?? (await this.probeMedia(file, clipSignal));
+        this.event(`Transition ${transition}: source prepared (${prepared ? "preloaded" : "resolved"})`);
         const duration = Number(info.format.duration);
-        const offset = live ? 0 : resume < duration - 1 ? resume : 0;
-        const hasAudio = live || info.streams.some(
-          (x: any) => x.codec_type === "audio",
-        );
+        const offset = resume < duration - 1 ? resume : 0;
+        const hasAudio = info.streams.some((x: any) => x.codec_type === "audio");
         const audio = info.streams.find((x: any) => x.codec_type === "audio");
         const outputAudioRate = audioSampleRate(s);
         this.event(
@@ -915,13 +910,13 @@ export class Engine extends EventEmitter {
           this.store.get<Record<string, string>>("uploadDates", {})[
             item.videoId
           ],
-          live ? undefined : {
-            offset,
-            total: duration,
-          },
+          { offset, total: duration },
         );
         clipSignal.throwIfAborted();
-        await idle.stop();
+        if (idle) {
+          await idle.stop();
+          idle = null;
+        }
         clipSignal.throwIfAborted();
         const args = [
           "-hide_banner",
@@ -931,9 +926,9 @@ export class Engine extends EventEmitter {
           "pipe:1",
           "-stats_period",
           "1",
-          ...(live
-            ? ["-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5"]
-            : ["-re", "-ss", String(offset)]),
+          "-re",
+          "-ss",
+          String(offset),
           "-i",
           file,
           "-f",
@@ -947,7 +942,8 @@ export class Engine extends EventEmitter {
           "[v]",
           "-map",
           hasAudio ? "0:a:0" : "1:a:0",
-          ...(live ? [] : ["-t", String(duration - offset)]),
+          "-t",
+          String(duration - offset),
           ...encodeArgs(
             s,
             this.config.UDP_BASE_PORT,
@@ -955,7 +951,14 @@ export class Engine extends EventEmitter {
           ),
         ];
         const child = launch(this.config.FFMPEG_PATH, args, clipSignal);
-        this.currentMedia = live ? null : { file, duration };
+        child.once("error", (error) =>
+          this.event(`Transition ${transition}: FFmpeg error — ${error.message}`, "error"),
+        );
+        child.once("close", (exitCode, exitSignal) =>
+          this.event(`Transition ${transition}: FFmpeg closed (code ${exitCode ?? "none"}, signal ${exitSignal ?? "none"})`),
+        );
+        this.event(`Transition ${transition} activated ${item.videoId} (FFmpeg PID ${child.pid ?? "unknown"})`);
+        this.currentMedia = { file, duration };
         this.state = "playing";
         if (s.shuffle && shortStartsRemaining > 0) {
           const remaining = Math.max(0, shortStartsRemaining - 1);
@@ -1020,7 +1023,7 @@ export class Engine extends EventEmitter {
                         activeSettings,
                         undefined,
                         publishedAt,
-                        live ? undefined : { offset: this.elapsed, total: duration },
+                        { offset: this.elapsed, total: duration },
                       ).then(() =>
                         this.event("Restored stale title/date overlay", "warn"),
                       );
@@ -1045,7 +1048,14 @@ export class Engine extends EventEmitter {
           }
         });
         const watchdog = setInterval(() => {
-          if (Date.now() - lastProgress > 30000) this.clip?.abort();
+          if (
+            Date.now() - lastProgress > 30000 &&
+            this.transitionGeneration === transition &&
+            this.clip === clipController
+          ) {
+            this.event(`Transition ${transition}: active producer stalled; recovery requested`, "error");
+            clipController.abort();
+          }
         }, 5000);
         let code: number;
         try {
@@ -1054,8 +1064,11 @@ export class Engine extends EventEmitter {
           clearInterval(watchdog);
         }
         signal.throwIfAborted();
-        if (code !== 0 || clipSignal.aborted)
-          throw new Error(mediaFailure(child));
+        if (code !== 0 || clipSignal.aborted) {
+          const reason = mediaFailure(child);
+          this.event(`Transition ${transition}: producer exited with code ${code} — ${reason}`, "error");
+          throw new Error(reason);
+        }
         this.store.success(item.id);
         consumed = true;
         this.event("Finished: " + item.title);
@@ -1083,10 +1096,11 @@ export class Engine extends EventEmitter {
         if (this.metadataTimer) clearTimeout(this.metadataTimer);
         this.metadataTimer = null;
         this.activationGeneration += 1;
-        this.currentMedia = null;
-        this.clip?.abort();
-        await idle.stop();
-        this.clip = null;
+        if (this.transitionGeneration === transition) this.currentMedia = null;
+        clipController.abort();
+        if (idle) await idle.stop();
+        if (this.clip === clipController) this.clip = null;
+        this.event(`Transition ${transition}: source cleanup complete`);
       }
       if (consumed) {
         this.bufferedIds.delete(item.videoId);

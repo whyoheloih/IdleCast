@@ -7,7 +7,7 @@ export type StoredItem = PlaylistItem & {
   error: string | null;
   seriesKey: string;
   seriesIndex: number | null;
-  liveStatus: "none" | "live" | "upcoming";
+  liveStatus: "none" | "live" | "upcoming" | "past";
 };
 export class Store {
   db: DatabaseSync;

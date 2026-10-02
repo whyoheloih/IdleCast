@@ -143,10 +143,50 @@ export const durationFilterValues = [
   "5hplus",
 ] as const;
 
-const filterSettings = z
-  .object({
-    years: z.array(z.number().int().min(2005).max(2100)).max(100).default([]),
-    durations: z.array(z.enum(durationFilterValues)).max(durationFilterValues.length).default([]),
+export const FILTER_MIN_YEAR = 2011;
+export const durationRangeValues = [120, 300, 600, 1500, 2400, 3600, 7200, 18000] as const;
+
+function migrateFilters(value: unknown) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return value;
+  const old = value as Record<string, unknown>;
+  const migrated: Record<string, unknown> = { ...old };
+  const currentYear = new Date().getFullYear();
+  if (!("yearMin" in migrated) || !("yearMax" in migrated)) {
+    const years = Array.isArray(old.years)
+      ? old.years.filter((year): year is number => Number.isInteger(year))
+      : [];
+    migrated.yearMin = years.length ? Math.max(FILTER_MIN_YEAR, Math.min(...years)) : FILTER_MIN_YEAR;
+    migrated.yearMax = years.length ? Math.min(currentYear, Math.max(...years)) : null;
+  }
+  if (!("durationMinSeconds" in migrated) || !("durationMaxSeconds" in migrated)) {
+    const buckets = Array.isArray(old.durations) ? old.durations : [];
+    const bounds: Record<string, [number, number | null]> = {
+      under5: [120, 300], "5to10": [300, 600], "10to25": [600, 1500],
+      "25to40": [1500, 2400], "40to60": [2400, 3600], "1to2h": [3600, 7200],
+      "2to5h": [7200, 18000], "5hplus": [18000, null],
+    };
+    const selected = buckets.map((bucket) => bounds[String(bucket)])
+      .filter((bound): bound is [number, number | null] => !!bound);
+    migrated.durationMinSeconds = selected.length
+      ? Math.min(...selected.map(([minimum]) => minimum)) : 120;
+    migrated.durationMaxSeconds = selected.some(([, maximum]) => maximum === null)
+      ? null : selected.length
+        ? Math.max(...selected.map(([, maximum]) => maximum ?? 18000)) : null;
+  }
+  delete migrated.years;
+  delete migrated.durations;
+  delete migrated.playLivestreams;
+  if (!("includePastLivestreams" in migrated)) migrated.includePastLivestreams = false;
+  return migrated;
+}
+
+const filterSettings = z.preprocess(
+  migrateFilters,
+  z.object({
+    yearMin: z.number().int().min(FILTER_MIN_YEAR).max(2100).default(FILTER_MIN_YEAR),
+    yearMax: z.number().int().min(FILTER_MIN_YEAR).max(2100).nullable().default(null),
+    durationMinSeconds: z.union([z.literal(120), z.literal(300), z.literal(600), z.literal(1500), z.literal(2400), z.literal(3600), z.literal(7200), z.literal(18000)]).default(120),
+    durationMaxSeconds: z.union([z.literal(120), z.literal(300), z.literal(600), z.literal(1500), z.literal(2400), z.literal(3600), z.literal(7200), z.literal(18000)]).nullable().default(null),
     excludeRegionRestricted: z.boolean().default(false),
     excludeNotEmbeddable: z.boolean().default(false),
     maxEstimatedSizeGb: z.number().min(0).max(1000).default(0),
@@ -154,12 +194,12 @@ const filterSettings = z
     seriesMode: z.enum(["off", "strict", "smart"]).default("off"),
     seriesLimit: z.number().int().min(2).max(50).default(10),
     includeShorts: z.boolean().default(false),
-    playLivestreams: z.boolean().default(false),
-  })
-  .strict()
-  .default({
-    years: [],
-    durations: [],
+    includePastLivestreams: z.boolean().default(false),
+  }).strict().default({
+    yearMin: FILTER_MIN_YEAR,
+    yearMax: null,
+    durationMinSeconds: 120,
+    durationMaxSeconds: null,
     excludeRegionRestricted: false,
     excludeNotEmbeddable: false,
     maxEstimatedSizeGb: 0,
@@ -167,8 +207,9 @@ const filterSettings = z
     seriesMode: "off",
     seriesLimit: 10,
     includeShorts: false,
-    playLivestreams: false,
-  });
+    includePastLivestreams: false,
+  }),
+);
 
 export const settingsSchema = z
   .object({

@@ -28,8 +28,9 @@ import {
   Terminal,
   Download,
   Database,
+  ArrowLeft,
 } from "lucide-react";
-import type { Settings } from "../server/config";
+import { FILTER_MIN_YEAR, type Settings } from "../server/config";
 import { APP_VERSION } from "../server/version";
 import type { StoredItem } from "../server/db";
 import { OverlayEditor } from "./OverlayEditor";
@@ -863,20 +864,35 @@ function App() {
               <div>
                 <h2><Database size={18} /> Managed playback files</h2>
                 <p>
-                  Current and upcoming media on disk · {(state?.downloadQueue.totalBytes ?? 0) < 1073741824
-                    ? ((state?.downloadQueue.totalBytes ?? 0) / 1048576).toFixed(1) + " MB"
-                    : ((state?.downloadQueue.totalBytes ?? 0) / 1073741824).toFixed(2) + " GB"} total
+                  Current and upcoming media on disk · {(state?.downloadQueue?.totalBytes ?? 0) < 1073741824
+                    ? ((state?.downloadQueue?.totalBytes ?? 0) / 1048576).toFixed(1) + " MB"
+                    : ((state?.downloadQueue?.totalBytes ?? 0) / 1073741824).toFixed(2) + " GB"} total
                 </p>
               </div>
-              <span className="count">{state?.downloadQueue.entries.length ?? 0}</span>
+              <div className="heading-actions">
+                <button type="button" onClick={() => setPage("Playlist")}>
+                  <ArrowLeft size={16} /> Back to Playlist
+                </button>
+                <span className="count">{state?.downloadQueue?.entries.length ?? 0}</span>
+              </div>
             </div>
-            <div className="download-queue-help">
+            <div className="download-queue-layout">
+              <div className="download-queue-sidebar">
+                <b>Downloaded videos</b>
+                {state?.downloadQueue?.entries.length ? (
+                  <span>{state.downloadQueue.entries.length} managed files</span>
+                ) : (
+                  <span><Download size={16} /> No videos downloaded yet</span>
+                )}
+              </div>
+              <div className="download-queue-content">
+                <div className="download-queue-help">
               Drag an upcoming video onto a highlighted position to change the real playback and download order.
               The current video stays active. Series move together in ascending episode order.
             </div>
-            {state?.downloadQueue.entries.length ? (
+            {state?.downloadQueue?.entries.length ? (
               <div className="download-queue-list">
-                {state.downloadQueue.entries.map((entry) => (
+                {state.downloadQueue?.entries.map((entry) => (
                   <div
                     className={"download-queue-row " + (entry.current ? "playing-row" : "")}
                     key={entry.id}
@@ -915,7 +931,7 @@ function App() {
                       )}
                     </div>
                     <span className={"queue-status status-" + entry.status.toLocaleLowerCase()}>
-                      {entry.status === "LIVE" ? "LIVE" : entry.status}
+                      {entry.status}
                       {entry.attempt > 1 ? " · attempt " + entry.attempt : ""}
                     </span>
                   </div>
@@ -924,10 +940,12 @@ function App() {
             ) : (
               <div className="empty">
                 <Download size={28} />
-                <h3>No managed downloads yet.</h3>
+                <h3>No videos downloaded yet</h3>
                 <p>Start or prepare playback to fill the five-video buffer.</p>
               </div>
             )}
+              </div>
+            </div>
           </section>
         )}
         {page === "Settings" && settings && (
@@ -1255,6 +1273,17 @@ function App() {
                 sync to build your queue.
               </p>
             </section>
+            <section className="panel settings-filter-panel">
+              <span className="eyebrow">05 / FILTERS</span>
+              <h2>Choose what enters the queue.</h2>
+              <FilterPanel
+                settings={settings}
+                stats={state?.filterStats}
+                disabled={!!busy || state?.state !== "stopped" || state?.syncing}
+                onChange={change}
+                onApply={() => void saveFilters()}
+              />
+            </section>
             <Credentials
               onSaved={async () => {
                 const result = await api("settings");
@@ -1445,15 +1474,69 @@ function App() {
   );
 }
 const durationChoices = [
-  ["under5", "Under 5 min"],
-  ["5to10", "5–10 min"],
-  ["10to25", "10–25 min"],
-  ["25to40", "25–40 min"],
-  ["40to60", "40–60 min"],
-  ["1to2h", "1–2 hours"],
-  ["2to5h", "2–5 hours"],
-  ["5hplus", "5+ hours"],
+  [120, "2 min"],
+  [300, "5 min"],
+  [600, "10 min"],
+  [1500, "25 min"],
+  [2400, "40 min"],
+  [3600, "1 hour"],
+  [7200, "2 hours"],
+  [18000, "5 hours"],
+  [null, "Any Length"],
 ] as const;
+
+function DualRange({
+  label,
+  options,
+  lower,
+  upper,
+  onChange,
+}: {
+  label: string;
+  options: ReadonlyArray<{ value: number | null; label: string }>;
+  lower: number;
+  upper: number;
+  onChange: (lower: number, upper: number) => void;
+}) {
+  const last = options.length - 1;
+  const start = (lower / last) * 100;
+  const end = (upper / last) * 100;
+  return (
+    <div className="range-filter">
+      <div className="range-filter-label">
+        <b>{label}</b>
+        <span>{options[lower].label} — {options[upper].label}</span>
+      </div>
+      <div
+        className="dual-range"
+        style={{ "--range-start": start + "%", "--range-end": end + "%" } as React.CSSProperties}
+      >
+        <div className="dual-range-track" />
+        <input
+          aria-label={label + " minimum"}
+          type="range"
+          min={0}
+          max={last}
+          value={lower}
+          onChange={(event) =>
+            onChange(Math.min(Number(event.target.value), upper), upper)
+          }
+        />
+        <input
+          aria-label={label + " maximum"}
+          type="range"
+          min={0}
+          max={last}
+          value={upper}
+          onChange={(event) =>
+            onChange(lower, Math.max(Number(event.target.value), lower))
+          }
+        />
+      </div>
+      <div className="range-endpoints"><span>{options[0].label}</span><span>{options[last].label}</span></div>
+    </div>
+  );
+}
 
 function FilterPanel({
   settings,
@@ -1471,14 +1554,20 @@ function FilterPanel({
   const filters = settings.filters;
   const update = (patch: Partial<typeof filters>) =>
     onChange({ filters: { ...filters, ...patch } });
-  const toggle = <T,>(values: T[], value: T) =>
-    values.includes(value)
-      ? values.filter((entry) => entry !== value)
-      : [...values, value];
-  const years = Array.from(
-    { length: new Date().getFullYear() - 2014 },
-    (_, index) => 2015 + index,
+  const currentYear = new Date().getFullYear();
+  const yearChoices = Array.from(
+    { length: currentYear - FILTER_MIN_YEAR + 1 },
+    (_, index) => ({ value: FILTER_MIN_YEAR + index, label: String(FILTER_MIN_YEAR + index) }),
   );
+  const yearLower = Math.max(0, yearChoices.findIndex(({ value }) => value === filters.yearMin));
+  const yearUpper = filters.yearMax === null
+    ? yearChoices.length - 1
+    : Math.max(yearLower, yearChoices.findIndex(({ value }) => value === filters.yearMax));
+  const durationOptions = durationChoices.map(([value, label]) => ({ value, label }));
+  const durationLower = Math.max(0, durationOptions.findIndex(({ value }) => value === filters.durationMinSeconds));
+  const durationUpper = filters.durationMaxSeconds === null
+    ? durationOptions.length - 1
+    : Math.max(durationLower, durationOptions.findIndex(({ value }) => value === filters.durationMaxSeconds));
   return (
     <div className="filter-panel">
       <div className="filter-summary">
@@ -1495,43 +1584,34 @@ function FilterPanel({
         <span>{stats?.detectedSeries ?? 0} series detected</span>
       </div>
 
-      <fieldset>
-        <legend>Upload years</legend>
-        <div className="checkbox-grid years-grid">
-          {years.map((year) => (
-            <label key={year}>
-              <input
-                type="checkbox"
-                checked={filters.years.includes(year)}
-                onChange={() =>
-                  update({ years: toggle(filters.years, year).sort() })
-                }
-              />
-              {year}
-            </label>
-          ))}
-        </div>
-      </fieldset>
-
-      <fieldset>
-        <legend>Video length</legend>
-        <div className="checkbox-grid">
-          {durationChoices.map(([value, label]) => (
-            <label key={value}>
-              <input
-                type="checkbox"
-                checked={filters.durations.includes(value)}
-                onChange={() =>
-                  update({
-                    durations: toggle(filters.durations, value),
-                  })
-                }
-              />
-              {label}
-            </label>
-          ))}
-        </div>
-      </fieldset>
+      <div className="filter-range-grid">
+        <fieldset>
+          <legend>Upload year range</legend>
+          <DualRange
+            label="Upload years"
+            options={yearChoices}
+            lower={yearLower}
+            upper={yearUpper}
+            onChange={(lower, upper) => update({
+              yearMin: yearChoices[lower].value,
+              yearMax: upper === yearChoices.length - 1 ? null : yearChoices[upper].value,
+            })}
+          />
+        </fieldset>
+        <fieldset>
+          <legend>Video length range</legend>
+          <DualRange
+            label="Video length"
+            options={durationOptions}
+            lower={durationLower}
+            upper={durationUpper}
+            onChange={(lower, upper) => update({
+              durationMinSeconds: durationOptions[lower].value ?? 120,
+              durationMaxSeconds: durationOptions[upper].value,
+            })}
+          />
+        </fieldset>
+      </div>
 
       <div className="filter-columns">
         <fieldset>
@@ -1539,23 +1619,21 @@ function FilterPanel({
           <label className="toggle">
             <input
               type="checkbox"
-              checked={filters.playLivestreams}
+              checked={filters.includePastLivestreams}
               onChange={(event) =>
-                update({ playLivestreams: event.target.checked })
+                update({ includePastLivestreams: event.target.checked })
               }
             />
-            Play Livestreams
+            Include Past Livestreams
           </label>
           <p className="hint">
-            Off by default. Currently-live broadcasts play directly and do not use a download slot. Upcoming streams stay excluded.
+            Off by default. Completed livestream VODs use the normal download pipeline. Current and upcoming broadcasts are always excluded.
           </p>
           <label className="toggle">
             <input
               type="checkbox"
               checked={filters.includeShorts}
-              onChange={(event) =>
-                update({ includeShorts: event.target.checked })
-              }
+              onChange={(event) => update({ includeShorts: event.target.checked })}
             />
             Include Shorts
           </label>
@@ -1564,23 +1642,18 @@ function FilterPanel({
             <input
               type="checkbox"
               checked={filters.excludeRegionRestricted}
-              onChange={(event) =>
-                update({ excludeRegionRestricted: event.target.checked })
-              }
+              onChange={(event) => update({ excludeRegionRestricted: event.target.checked })}
             />
             Exclude region-restricted videos
           </label>
           <p className="hint">
-            This catches partial country blocks, including some music claims.
-            YouTube does not reveal the claim reason.
+            This catches partial country blocks, including some music claims. YouTube does not reveal the claim reason.
           </p>
           <label className="toggle">
             <input
               type="checkbox"
               checked={filters.excludeNotEmbeddable}
-              onChange={(event) =>
-                update({ excludeNotEmbeddable: event.target.checked })
-              }
+              onChange={(event) => update({ excludeNotEmbeddable: event.target.checked })}
             />
             Exclude non-embeddable videos
           </label>
@@ -1596,16 +1669,11 @@ function FilterPanel({
               max="1000"
               step="0.25"
               value={filters.maxEstimatedSizeGb}
-              onChange={(event) =>
-                update({
-                  maxEstimatedSizeGb: Number(event.target.value) || 0,
-                })
-              }
+              onChange={(event) => update({ maxEstimatedSizeGb: Number(event.target.value) || 0 })}
             />
           </label>
           <p className="hint">
-            0 disables the limit. The estimate uses duration and selected
-            quality; resolution is never reduced.
+            0 disables the limit. The estimate uses duration and selected quality; resolution is never reduced.
           </p>
           <label>
             Exclude after this many failures
@@ -1614,9 +1682,7 @@ function FilterPanel({
               min="0"
               max="100"
               value={filters.maxFailures}
-              onChange={(event) =>
-                update({ maxFailures: Number(event.target.value) || 0 })
-              }
+              onChange={(event) => update({ maxFailures: Number(event.target.value) || 0 })}
             />
           </label>
           <p className="hint">0 disables failure-history filtering.</p>
@@ -1629,11 +1695,7 @@ function FilterPanel({
           Detection
           <select
             value={filters.seriesMode}
-            onChange={(event) =>
-              update({
-                seriesMode: event.target.value as typeof filters.seriesMode,
-              })
-            }
+            onChange={(event) => update({ seriesMode: event.target.value as typeof filters.seriesMode })}
           >
             <option value="off">Off</option>
             <option value="strict">Strict episode markers</option>
@@ -1647,54 +1709,42 @@ function FilterPanel({
             min="2"
             max="50"
             value={filters.seriesLimit}
-            onChange={(event) =>
-              update({ seriesLimit: Number(event.target.value) })
-            }
+            onChange={(event) => update({ seriesLimit: Number(event.target.value) })}
           />
         </label>
         <p className="hint">
-          Detects Episode, Part, #1, [1], and (1). Smart mode also detects
-          similar titles ending in numbers. The limit includes the triggering
-          episode; normal selection resumes after that many consecutive parts.
+          Detects Episode, Part, #1, [1], and (1). Smart mode also detects similar titles ending in numbers. The limit includes the triggering episode; normal selection resumes after that many consecutive parts.
         </p>
       </fieldset>
 
       <div className="filter-actions">
         <button
           type="button"
-          onClick={() =>
-            update({
-              years: [],
-              durations: [],
-              excludeRegionRestricted: false,
-              excludeNotEmbeddable: false,
-              maxEstimatedSizeGb: 0,
-              maxFailures: 0,
-              seriesMode: "off",
-              seriesLimit: 10,
-              includeShorts: false,
-              playLivestreams: false,
-            })
-          }
+          onClick={() => update({
+            yearMin: FILTER_MIN_YEAR,
+            yearMax: null,
+            durationMinSeconds: 120,
+            durationMaxSeconds: null,
+            excludeRegionRestricted: false,
+            excludeNotEmbeddable: false,
+            maxEstimatedSizeGb: 0,
+            maxFailures: 0,
+            seriesMode: "off",
+            seriesLimit: 10,
+            includeShorts: false,
+            includePastLivestreams: false,
+          })}
         >
           Reset all
         </button>
-        <button
-          type="button"
-          className="primary"
-          disabled={disabled}
-          onClick={onApply}
-        >
+        <button type="button" className="primary" disabled={disabled} onClick={onApply}>
           Save filters & sync
         </button>
-        {disabled && (
-          <small>Stop playback and wait for sync to change filters.</small>
-        )}
+        {disabled && <small>Stop playback and wait for sync to change filters.</small>}
       </div>
     </div>
   );
 }
-
 function Metric({
   label,
   value,

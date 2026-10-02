@@ -21,7 +21,7 @@ export type PlaylistItem = {
   isShort?: boolean;
   playCount?: number;
   selectionPenalty?: number;
-  liveStatus?: "none" | "live" | "upcoming";
+  liveStatus?: "none" | "upcoming" | "past";
 };
 export interface PlaylistProvider {
   fetch(playlistId: string, signal: AbortSignal): Promise<PlaylistItem[]>;
@@ -31,7 +31,7 @@ export type DownloadActivity = {
   title: string;
   thumbnail: string;
   percent: number | null;
-  status: "queued" | "downloading" | "retrying" | "downloaded" | "failed" | "live";
+  status: "queued" | "downloading" | "retrying" | "downloaded" | "failed";
   attempt: number;
   bytes?: number;
   error?: string;
@@ -42,7 +42,6 @@ export type MediaSourceHooks = {
 };
 export interface MediaSourceProvider {
   resolve(item: PlaylistItem, signal: AbortSignal): Promise<string>;
-  resolveLive?(item: PlaylistItem, signal: AbortSignal): Promise<string>;
   pin?(id: string): void;
   retain?(ids: string[]): void;
   remove?(id: string): Promise<void>;
@@ -157,7 +156,7 @@ export class YouTubePlaylistProvider implements PlaylistProvider {
       const data = await this.get(
         "videos",
         {
-          part: "contentDetails,status,snippet",
+          part: "contentDetails,status,snippet,liveStreamingDetails",
           id: ids.slice(n, n + 50).join(","),
         },
         signal,
@@ -170,16 +169,19 @@ export class YouTubePlaylistProvider implements PlaylistProvider {
       const v = videos.get(item.videoId);
       const broadcast = v?.snippet?.liveBroadcastContent;
       item.liveStatus =
-        broadcast === "live" ? "live" : broadcast === "upcoming" ? "upcoming" : "none";
+        broadcast === "live"
+          ? "live"
+          : broadcast === "upcoming"
+            ? "upcoming"
+            : v?.liveStreamingDetails?.actualEndTime
+              ? "past"
+              : "none";
       item.available =
         !!v &&
         v.status?.privacyStatus !== "private" &&
+        item.liveStatus !== "live" &&
         item.liveStatus !== "upcoming";
-      item.duration = item.liveStatus === "live"
-        ? null
-        : v
-          ? parseDuration(v.contentDetails?.duration)
-          : null;
+      item.duration = v ? parseDuration(v.contentDetails?.duration) : null;
       item.publishedAt = v?.snippet?.publishedAt ?? "";
       const shortMetadata = [
         v?.snippet?.title,
@@ -273,23 +275,6 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
     this.queue = task.catch(() => {});
     this.pending.set(item.videoId, task);
     return withCancellation(task, signal);
-  }
-  async resolveLive(item: PlaylistItem, signal: AbortSignal): Promise<string> {
-    if (!this.c.EXPERIMENTAL_YOUTUBE) throw new Error("Experimental YouTube source is disabled");
-    if (!/^[A-Za-z0-9_-]{11}$/.test(item.videoId)) throw new Error("Invalid YouTube video identifier");
-    this.hooks.onDownload?.(this.activity(item, "live", null, 1));
-    const output = await this.run(
-      this.c.YTDLP_PATH,
-      ["--ignore-config", ...(this.c.YTDLP_COOKIES_FILE ? ["--cookies", this.c.YTDLP_COOKIES_FILE] : []),
-       "--no-playlist", "--no-color", "--js-runtimes", "node:" + process.execPath,
-       "--socket-timeout", "20", "--retries", "2",
-       "-f", "best[acodec!=none][vcodec!=none]/best", "-g", "--",
-       "https://www.youtube.com/watch?v=" + item.videoId],
-      AbortSignal.any([signal, this.lifetime.signal]), 60000,
-    );
-    const url = output.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
-    if (!url || !/^https?:\/\//.test(url)) throw new Error("YouTube live stream URL could not be resolved");
-    return url;
   }
   async close() { this.lifetime.abort(); await this.queue; }
   private activity(item: PlaylistItem, status: DownloadActivity["status"], percent: number | null, attempt: number, extra: Partial<DownloadActivity> = {}): DownloadActivity {
