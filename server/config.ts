@@ -93,8 +93,12 @@ export function readConfig(env: NodeJS.ProcessEnv): Config {
   c.FFMPEG_PATH = executablePath(c.FFMPEG_PATH);
   c.FFPROBE_PATH = executablePath(c.FFPROBE_PATH);
   c.YTDLP_PATH = executablePath(c.YTDLP_PATH);
-  if (c.YTDLP_COOKIES_FILE)
+  if (c.YTDLP_COOKIES_FILE) {
     c.YTDLP_COOKIES_FILE = path.resolve(c.YTDLP_COOKIES_FILE);
+  } else {
+    const localCookies = path.join(c.DATA_DIR, "youtube-cookies.txt");
+    if (existsSync(localCookies)) c.YTDLP_COOKIES_FILE = localCookies;
+  }
   return c;
 }
 const destination = (platform: "youtube" | "twitch") =>
