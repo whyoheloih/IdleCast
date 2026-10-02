@@ -163,8 +163,20 @@ test("SQLite migration, atomic replacement, failure preservation, cursor and res
     db.set("desired", true);
     assert.throws(() => db.replace([item("duplicate"), item("duplicate")]));
     assert.equal(db.count(), 2);
-    db.replace([item("one", 3)]);
-    assert.equal(db.all()[0].failures, 1);
+    db.replace([{
+      ...item("one", 3),
+      publishedAt: "2025-06-07T00:00:00Z",
+      regionRestricted: true,
+      embeddable: false,
+      isShort: true,
+    }]);
+    const persisted = db.all()[0];
+    assert.equal(persisted.failures, 1);
+    assert.equal(persisted.failureCount, 1);
+    assert.equal(persisted.publishedAt, "2025-06-07T00:00:00Z");
+    assert.equal(persisted.regionRestricted, true);
+    assert.equal(persisted.embeddable, false);
+    assert.equal(persisted.isShort, true);
     assert.equal(db.count(), 1);
     db.close();
     db = new Store(file);

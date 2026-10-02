@@ -21,7 +21,7 @@ export class Store {
   private migrate() {
     const version = (this.db.prepare("PRAGMA user_version").get() as any)
       .user_version;
-    if (version > 3)
+    if (version > 4)
       throw new Error("Database is newer than this version of IdleCast");
     if (version === 0)
       this.db.exec(`
@@ -40,6 +40,10 @@ export class Store {
     if (version === 1 || version === 2)
       this.db.exec(
         "BEGIN IMMEDIATE; ALTER TABLE items ADD COLUMN liveStatus TEXT NOT NULL DEFAULT 'none'; PRAGMA user_version=3; COMMIT;",
+      );
+    if (version <= 3)
+      this.db.exec(
+        "BEGIN IMMEDIATE; ALTER TABLE items ADD COLUMN publishedAt TEXT NOT NULL DEFAULT ''; ALTER TABLE items ADD COLUMN regionRestricted INTEGER; ALTER TABLE items ADD COLUMN embeddable INTEGER; ALTER TABLE items ADD COLUMN isShort INTEGER NOT NULL DEFAULT 0; PRAGMA user_version=4; COMMIT;",
       );
   }
   get<T>(key: string, fallback: T): T {
@@ -69,6 +73,11 @@ export class Store {
       seriesKey: i.seriesKey ?? "",
       seriesIndex: i.seriesIndex ?? null,
       liveStatus: i.liveStatus ?? "none",
+      publishedAt: i.publishedAt ?? "",
+      regionRestricted: !!i.regionRestricted,
+      embeddable: i.embeddable === null ? undefined : !!i.embeddable,
+      isShort: !!i.isShort,
+      failureCount: i.failures ?? 0,
     }));
   }
   all(): StoredItem[] {
@@ -82,7 +91,7 @@ export class Store {
     try {
       this.db.exec("CREATE TEMP TABLE incoming(id TEXT PRIMARY KEY)");
       const put = this.db.prepare(
-        "INSERT INTO items(id,videoId,position,title,channel,thumbnail,available,duration,liveStatus,seriesKey,seriesIndex) VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET videoId=excluded.videoId,position=excluded.position,title=excluded.title,channel=excluded.channel,thumbnail=excluded.thumbnail,available=excluded.available,duration=excluded.duration,liveStatus=excluded.liveStatus,seriesKey=excluded.seriesKey,seriesIndex=excluded.seriesIndex",
+        "INSERT INTO items(id,videoId,position,title,channel,thumbnail,available,duration,publishedAt,regionRestricted,embeddable,isShort,liveStatus,seriesKey,seriesIndex) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET videoId=excluded.videoId,position=excluded.position,title=excluded.title,channel=excluded.channel,thumbnail=excluded.thumbnail,available=excluded.available,duration=excluded.duration,publishedAt=excluded.publishedAt,regionRestricted=excluded.regionRestricted,embeddable=excluded.embeddable,isShort=excluded.isShort,liveStatus=excluded.liveStatus,seriesKey=excluded.seriesKey,seriesIndex=excluded.seriesIndex",
       );
       const mark = this.db.prepare("INSERT INTO incoming VALUES(?)");
       for (const i of items) {
@@ -95,6 +104,10 @@ export class Store {
           i.thumbnail,
           Number(i.available),
           i.duration,
+          i.publishedAt ?? "",
+          i.regionRestricted === undefined ? null : Number(i.regionRestricted),
+          i.embeddable === undefined ? null : Number(i.embeddable),
+          Number(!!i.isShort),
           i.liveStatus ?? "none",
           i.seriesKey ?? "",
           i.seriesIndex ?? null,
