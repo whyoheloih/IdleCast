@@ -11,6 +11,7 @@ import {
   prepareQueue,
   isLongVideo,
   canStartShuffledQueue,
+  canStartBufferedQueue,
   shuffleOrderError,
   needsLongDownloadLead,
   canLeadLongDownload,
@@ -75,7 +76,7 @@ test("shared YouTube and Twitch encoding retains 48 kHz audio", () => {
 });
 
 test("shuffle starts with two short videos and gives 3-hour videos download lead time", () => {
-  const items = [4201, 30, 12000, 4200, 8000, 20, 14400, 1000].map(
+  const items = [4201, 300, 12000, 4200, 8000, 600, 14400, 1000, 1200, 1500].map(
     (duration, index) => ({
       id: String(index),
       videoId: String(index),
@@ -85,6 +86,7 @@ test("shuffle starts with two short videos and gives 3-hour videos download lead
       thumbnail: "",
       available: true,
       duration,
+      publishedAt: "2026-01-01T00:00:00Z",
     }),
   );
   const queue = prepareQueue(
@@ -94,6 +96,10 @@ test("shuffle starts with two short videos and gives 3-hour videos download lead
   ).items;
   assert.ok(canStartShuffledQueue(queue[0]));
   assert.ok(canStartShuffledQueue(queue[1]));
+  assert.ok(
+    queue.slice(0, 5).every(canStartBufferedQueue),
+    "the first five shuffled downloads must be 30 minutes or shorter",
+  );
   for (let index = 1; index < queue.length; index++) {
     if (needsLongDownloadLead(queue[index]))
       assert.ok(
@@ -108,16 +114,27 @@ test("shuffle starts with two short videos and gives 3-hour videos download lead
   assert.equal(isLongVideo(items[3]), false);
   assert.equal(shuffleOrderError(queue), null);
 
-  const badOpening = [...queue];
-  const ordinaryLong = badOpening.findIndex(
-    (item) => isLongVideo(item) && !needsLongDownloadLead(item),
+  const badBufferedOpening = [...queue];
+  const overThirty = badBufferedOpening.findIndex(
+    (item) => (item.duration ?? 0) > 30 * 60,
   );
-  badOpening.splice(0, 0, badOpening.splice(ordinaryLong, 1)[0]);
+  badBufferedOpening.splice(0, 0, badBufferedOpening.splice(overThirty, 1)[0]);
+  assert.match(shuffleOrderError(badBufferedOpening)!, /first five playable/);
+
+  const badOpening = [...queue];
+  const overFifteen = badOpening.findIndex(
+    (item) => (item.duration ?? 0) > 15 * 60 && (item.duration ?? 0) <= 30 * 60,
+  );
+  badOpening.splice(0, 0, badOpening.splice(overFifteen, 1)[0]);
   assert.match(shuffleOrderError(badOpening)!, /first two playable/);
 
   const badLead = [...queue];
   const veryLong = badLead.findIndex(needsLongDownloadLead);
-  badLead.splice(2, 0, badLead.splice(veryLong, 1)[0]);
+  const [movedVeryLong] = badLead.splice(veryLong, 1);
+  const invalidLead = badLead.findIndex(
+    (item, index) => index >= 4 && !canLeadLongDownload(item),
+  );
+  badLead.splice(invalidLead + 1, 0, movedVeryLong);
   assert.match(shuffleOrderError(badLead)!, /over 3 hours/);
 });
 test("full title and upload date fit beside avatar without truncation",()=>{

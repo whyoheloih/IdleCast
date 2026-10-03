@@ -90,8 +90,9 @@ export class Engine extends EventEmitter {
   private cachedSizes = new Map<string, number>();
   private refillTask: Promise<void> | null = null;
   private readonly bufferLimit = 5;
+  private readonly startupBufferTarget = 3;
   private bufferedCount = 0;
-  private bufferTarget = 5;
+  private bufferTarget = 3;
   private activeSource: MediaSourceProvider | null = null;
   private queueRefreshPending = false;
   private activationGeneration = 0;
@@ -356,7 +357,7 @@ export class Engine extends EventEmitter {
     this.preparedMedia.clear();
     this.bufferedCount = 0;
     const initial = this.bufferCandidates(this.store.all());
-    this.bufferTarget = Math.min(this.bufferLimit, initial.length);
+    this.bufferTarget = Math.min(this.startupBufferTarget, initial.length);
     for (const item of initial.slice(0, this.bufferTarget))
       if (!this.cachedSizes.has(item.videoId))
         this.downloadStates.set(item.videoId, {
@@ -378,7 +379,7 @@ export class Engine extends EventEmitter {
           signal,
           this.bufferTarget,
         );
-        // Permanently failed/retry-delayed items cannot hold startup at 3/5
+        // Permanently failed/retry-delayed items cannot hold startup at 3/3
         // forever. Start once every currently eligible finite item is ready.
         const eligibleNow = this.bufferCandidates(this.store.all()).length;
         this.bufferTarget = Math.min(
@@ -410,6 +411,10 @@ export class Engine extends EventEmitter {
           "/" +
           this.bufferTarget +
           " videos",
+      );
+      this.bufferTarget = Math.min(
+        this.bufferLimit,
+        this.bufferCandidates(this.store.all()).length,
       );
       workers = (["youtube", "twitch"] as const).map((name, n) =>
         s[name].enabled

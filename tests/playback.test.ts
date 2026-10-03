@@ -281,6 +281,10 @@ test("real FFmpeg loop skips unavailable files, survives one failed output, and 
     }
     const logs = db.logs() as any[];
     assert.ok(
+      logs.some((l) => l.message === "Startup buffer ready: 3/3 videos"),
+      "broadcast should start after three prepared videos",
+    );
+    assert.ok(
       logs.some((l) =>
         l.message.startsWith("Media failed while buffering: missing"),
       ),

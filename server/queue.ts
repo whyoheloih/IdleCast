@@ -4,6 +4,8 @@ import type { Settings } from "./config.js";
 
 export const LONG_VIDEO_SECONDS = 70 * 60;
 export const SHUFFLE_START_MAX_SECONDS = 15 * 60;
+export const STARTUP_DOWNLOAD_COUNT = 5;
+export const STARTUP_DOWNLOAD_MAX_SECONDS = 30 * 60;
 export const DOWNLOAD_LEAD_SECONDS = 2 * 60 * 60;
 export const VERY_LONG_VIDEO_SECONDS = 3 * 60 * 60;
 
@@ -31,6 +33,14 @@ export function canLeadLongDownload(item: PlaylistItem) {
   );
 }
 
+export function canStartBufferedQueue(item: PlaylistItem) {
+  return (
+    item.available &&
+    item.duration !== null &&
+    item.duration <= STARTUP_DOWNLOAD_MAX_SECONDS
+  );
+}
+
 export function canStartShuffledQueue(item: PlaylistItem) {
   return (
     item.available &&
@@ -52,6 +62,13 @@ export function canFollowInShuffledQueue(
 export function shuffleOrderError(items: PlaylistItem[]) {
   const playable = items.filter((item) => item.available);
   if (!playable.length) return null;
+  const bufferedOpeningCount = Math.min(STARTUP_DOWNLOAD_COUNT, playable.length);
+  if (
+    playable
+      .slice(0, bufferedOpeningCount)
+      .some((item) => !canStartBufferedQueue(item))
+  )
+    return "The first five playable shuffled videos must be 30 minutes or shorter";
   const shortOpeningCount = Math.min(2, playable.length);
   if (
     playable
@@ -328,9 +345,18 @@ export function prepareQueue(
     while (blocks.length) {
       const previous = ordered.at(-1)?.at(-1);
       let candidates = blocks.map((_, index) => index);
-      if (ordered.flat().length < 2) {
+      const queuedCount = ordered.reduce((count, block) => count + block.length, 0);
+      if (queuedCount < STARTUP_DOWNLOAD_COUNT) {
+        const remaining = STARTUP_DOWNLOAD_COUNT - queuedCount;
         const opening = candidates.filter((index) =>
-          canStartShuffledQueue(blocks[index][0]),
+          blocks[index].slice(0, remaining).every(canStartBufferedQueue),
+        );
+        if (opening.length) candidates = opening;
+      }
+      if (queuedCount < 2) {
+        const remaining = 2 - queuedCount;
+        const opening = candidates.filter((index) =>
+          blocks[index].slice(0, remaining).every(canStartShuffledQueue),
         );
         if (opening.length) candidates = opening;
       } else if (previous) {
