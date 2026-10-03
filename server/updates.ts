@@ -4,6 +4,16 @@ export const updateCommand =
 export const updateHistory = [
   {
     version: "1.4.1",
+    date: "Oct 3, 2026",
+    title: "Core reliability audit",
+    items: [
+      "Failed prepared videos are evicted from the rolling cache so one corrupt or incompatible file cannot poison a buffer slot",
+      "Corrupt or empty process-owner files are recovered automatically instead of blocking IdleCast startup",
+      "Mobile navigation stays within the viewport and scrolls inside its header when all control-room pages are present",
+      "Core API, database, sync, filters, shuffle, FFmpeg audio/video, transition recovery, desktop packaging, and browser workflows were reverified",
+    ],
+  },  {
+    version: "1.4.1",
     date: "Oct 1, 2026",
     title: "Animated countdown rotation",
     items: [

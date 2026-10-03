@@ -1110,6 +1110,10 @@ export class Engine extends EventEmitter {
           consumed = true;
           this.event("Skipped: " + item.title);
         } else {
+          // A source that fails after probing must leave the prepared set too.
+          // Otherwise the same corrupt/incompatible cache entry occupies a buffer
+          // slot and is retried forever after its cooldown.
+          consumed = true;
           this.recordFailure(
             item,
             error instanceof Error

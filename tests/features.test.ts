@@ -19,7 +19,7 @@ test("combined sources deduplicate video identities and retain upload dates", as
   const db = new Store(":memory:");
   db.set("settings", {...defaults,sources:[{kind:"playlist",value:"PL_one"},{kind:"playlist",value:"PL_two"}]});
   const engine = new Engine(db,readConfig({ADMIN_PASSWORD:"test-password-long-enough"}),{playlist:{async fetch(id) {
-    return ["shared",id].map((videoId,position)=>({id:id+videoId,videoId,position,title:videoId,channel:"channel",thumbnail:"",available:true,duration:60,publishedAt:"2026-09-13T00:00:00Z"}));
+    return ["shared",id].map((videoId,position)=>({id:id+videoId,videoId,position,title:videoId,channel:"channel",thumbnail:"",available:true,duration:120,publishedAt:"2026-09-13T00:00:00Z"}));
   }}});
   try {
     await engine.sync();
@@ -63,7 +63,8 @@ test("channel handle resolves uploads and title filtering/shuffle preserves dupl
       channel: "x",
       thumbnail: "",
       available: true,
-      duration: 1,
+      duration: 120,
+      publishedAt: "2026-09-13T00:00:00Z",
     }),
   );
   const settings = settingsSchema.parse({

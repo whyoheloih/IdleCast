@@ -953,7 +953,8 @@ footer span {
 @media (max-width: 720px) {
   aside {
     position: static;
-    width: auto;
+    width: 100%;
+    max-width: 100%;
     padding: 15px 16px;
     flex-direction: row;
     border-right: 0;
@@ -981,6 +982,9 @@ footer span {
   nav {
     flex-direction: row;
     gap: 2px;
+    min-width: 0;
+    flex: 1 1 0;
+    overflow-x: auto;
   }
   nav button {
     padding: 10px;

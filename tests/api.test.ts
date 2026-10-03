@@ -86,7 +86,7 @@ test("admin authentication, write-origin checks, secret exclusion, validation, a
     store.replace([
       { id: "one", videoId: "abcdefghijk", position: 0, title: "One", channel: "", thumbnail: "", available: true, duration: 1 },
       { id: "two", videoId: "lmnopqrstuv", position: 1, title: "Two", channel: "", thumbnail: "", available: true, duration: 1 },
-      { id: "long", videoId: "zzzzzzzzzzz", position: 2, title: "Long", channel: "", thumbnail: "", available: true, duration: 5000 },
+      { id: "long", videoId: "zzzzzzzzzzz", position: 2, title: "Long", channel: "", thumbnail: "", available: true, duration: 1000 },
     ]);
     assert.equal(
       (

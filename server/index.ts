@@ -20,7 +20,7 @@ async function main() {
     } catch (e: any) {
       if (e.code !== "EEXIST") throw e;
       const pid = Number(await readFile(lockPath, "utf8"));
-      let alive = pid !== process.pid;
+      let alive = Number.isSafeInteger(pid) && pid > 0 && pid !== process.pid;
       try {
         if (alive) process.kill(pid, 0);
       } catch (e: any) {

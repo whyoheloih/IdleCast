@@ -162,6 +162,53 @@ test("FFmpeg overlay has no background box and has outlined text with an opaque 
     await rm(root, { recursive: true, force: true });
   }
 });
+test("failed prepared media is evicted instead of poisoning the buffer", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "idlecast-failed-transition-"));
+  const file = path.join(root, "source.mp4");
+  const db = new Store(path.join(root, "db.sqlite"));
+  const removed: string[] = [];
+  try {
+    await runCapture(
+      "ffmpeg",
+      ["-y", "-f", "lavfi", "-i", "color=s=320x180:r=30", "-t", "1", "-c:v", "libx264", "-pix_fmt", "yuv420p", file],
+      signal(),
+    );
+    const c = readConfig({
+      ADMIN_PASSWORD: "test-password-long-enough",
+      DATA_DIR: root,
+      MEDIA_DIR: root,
+      FONT_FILE: font,
+      FFMPEG_PATH: path.join(root, "missing-ffmpeg.exe"),
+    });
+    db.set("settings", { ...defaults, mediaSource: "local", youtube: { ...defaults.youtube, enabled: true } });
+    db.replace([{
+      id: "broken", videoId: "abcdefghijk", position: 0, title: "Broken activation",
+      channel: "Test", thumbnail: "", available: true, duration: 1,
+    }]);
+    const engine = new Engine(db, c, {
+      source: {
+        resolve: async () => file,
+        remove: async (id) => { removed.push(id); },
+      },
+      outputs: { youtube: { name: "youtube", args: () => [] } },
+    });
+    try {
+      await engine.start();
+      const deadline = Date.now() + 8000;
+      while (Date.now() < deadline && !removed.length)
+        await delay(100, signal());
+      assert.deepEqual(removed, ["abcdefghijk"]);
+      assert.equal((engine as any).bufferedIds.has("abcdefghijk"), false);
+      assert.equal((engine as any).preparedMedia.has("abcdefghijk"), false);
+    } finally {
+      await engine.stop(true);
+      await engine.close();
+    }
+  } finally {
+    db.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 test("real FFmpeg loop skips unavailable files, survives one failed output, and preserves stop/restart intent", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "idlecast-engine-"));
   const db = new Store(path.join(root, "db.sqlite"));

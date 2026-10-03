@@ -194,11 +194,23 @@ try {
     path: path.join(screenshots, "mobile.png"),
     fullPage: true,
   });
-  assert.ok(
-    await page.evaluate(
-      () => document.documentElement.scrollWidth <= window.innerWidth,
-    ),
-    "mobile should have no horizontal overflow",
+  const mobileOverflow = await page.evaluate(() => ({
+    viewport: window.innerWidth,
+    document: document.documentElement.scrollWidth,
+    elements: [...document.querySelectorAll("body *")]
+      .map((element) => ({
+        tag: element.tagName,
+        className: (element as HTMLElement).className,
+        left: element.getBoundingClientRect().left,
+        right: element.getBoundingClientRect().right,
+      }))
+      .filter(({ left, right }) => left < -0.5 || right > window.innerWidth + 0.5)
+      .slice(0, 10),
+  }));
+  assert.equal(
+    mobileOverflow.document,
+    mobileOverflow.viewport,
+    "mobile should have no horizontal overflow: " + JSON.stringify(mobileOverflow.elements),
   );
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page.getByRole("button", { name: "Open overlay preview" }).click();
