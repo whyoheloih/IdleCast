@@ -178,10 +178,38 @@ test("SQLite migration, atomic replacement, failure preservation, cursor and res
     assert.equal(persisted.embeddable, false);
     assert.equal(persisted.isShort, true);
     assert.equal(db.count(), 1);
+    const completedHistory = db.startPlayback({
+      ...item("history-complete"),
+      title: "Completed history item",
+    });
+    db.finishPlayback(completedHistory, "played", 4.5);
+    db.startPlayback({
+      ...item("history-active"),
+      title: "Interrupted history item",
+    });
     db.close();
     db = new Store(file);
     assert.deepEqual(db.get("cursor", null), { id: "two", offset: 7 });
     assert.equal(db.get("desired", false), true);
+    assert.deepEqual(
+      db.playbackHistory().map((entry) => ({
+        title: entry.title,
+        status: entry.status,
+        watchedSeconds: entry.watchedSeconds,
+      })),
+      [
+        {
+          title: "Interrupted history item",
+          status: "interrupted",
+          watchedSeconds: 0,
+        },
+        {
+          title: "Completed history item",
+          status: "played",
+          watchedSeconds: 4.5,
+        },
+      ],
+    );
     for (let i = 0; i < 1010; i++) db.log("info", "Event");
     assert.equal(
       (db.db.prepare("SELECT count(*) AS n FROM logs").get() as any).n,

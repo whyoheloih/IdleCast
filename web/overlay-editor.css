@@ -83,7 +83,7 @@
   color: #b7c0cb;
 }
 .editor-preview-meta [role="status"] {
-  color: #b6ee7a;
+  color: #5aa9ff;
 }
 .editor-preview-column .alert {
   margin-top: 18px;
@@ -106,12 +106,12 @@
   margin-bottom: 10px;
 }
 .scale-control output {
-  color: #b6ee7a;
+  color: #5aa9ff;
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
 .overlay-editor input[type="range"] {
-  accent-color: #b6ee7a;
+  accent-color: #5aa9ff;
   padding: 0;
   margin: 0;
   height: 24px;

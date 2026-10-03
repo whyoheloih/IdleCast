@@ -1,6 +1,17 @@
 import { DatabaseSync } from "node:sqlite";
 import { defaults, settingsSchema, type Settings } from "./config.js";
 import type { PlaylistItem } from "./providers.js";
+export type PlaybackHistoryItem = {
+  id: number;
+  startedAt: number;
+  endedAt: number | null;
+  videoId: string;
+  title: string;
+  channel: string;
+  duration: number | null;
+  status: "playing" | "played" | "skipped" | "failed" | "stopped" | "interrupted";
+  watchedSeconds: number;
+};
 export type StoredItem = PlaylistItem & {
   failures: number;
   retryAt: number;
@@ -17,11 +28,12 @@ export class Store {
       "PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON; PRAGMA busy_timeout=5000;",
     );
     this.migrate();
+    this.db.prepare("UPDATE playback_history SET status='interrupted',endedAt=? WHERE status='playing'").run(Date.now());
   }
   private migrate() {
     const version = (this.db.prepare("PRAGMA user_version").get() as any)
       .user_version;
-    if (version > 4)
+    if (version > 5)
       throw new Error("Database is newer than this version of IdleCast");
     if (version === 0)
       this.db.exec(`
@@ -44,6 +56,10 @@ export class Store {
     if (version <= 3)
       this.db.exec(
         "BEGIN IMMEDIATE; ALTER TABLE items ADD COLUMN publishedAt TEXT NOT NULL DEFAULT ''; ALTER TABLE items ADD COLUMN regionRestricted INTEGER; ALTER TABLE items ADD COLUMN embeddable INTEGER; ALTER TABLE items ADD COLUMN isShort INTEGER NOT NULL DEFAULT 0; PRAGMA user_version=4; COMMIT;",
+      );
+    if (version <= 4)
+      this.db.exec(
+        "BEGIN IMMEDIATE; CREATE TABLE playback_history(id INTEGER PRIMARY KEY AUTOINCREMENT,startedAt INTEGER NOT NULL,endedAt INTEGER,videoId TEXT NOT NULL,title TEXT NOT NULL,channel TEXT NOT NULL,duration REAL,status TEXT NOT NULL,watchedSeconds REAL NOT NULL DEFAULT 0); CREATE INDEX playback_history_time ON playback_history(startedAt DESC); PRAGMA user_version=5; COMMIT;",
       );
   }
   get<T>(key: string, fallback: T): T {
@@ -188,6 +204,22 @@ export class Store {
     this.db.exec(
       "DELETE FROM logs WHERE id < (SELECT COALESCE(MAX(id),0)-999 FROM logs)",
     );
+  }
+  startPlayback(item: PlaylistItem) {
+    const result = this.db
+      .prepare("INSERT INTO playback_history(startedAt,videoId,title,channel,duration,status) VALUES(?,?,?,?,?,'playing')")
+      .run(Date.now(), item.videoId, item.title, item.channel, item.duration);
+    return Number(result.lastInsertRowid);
+  }
+  finishPlayback(id: number, status: PlaybackHistoryItem["status"], watchedSeconds: number) {
+    this.db
+      .prepare("UPDATE playback_history SET endedAt=?,status=?,watchedSeconds=? WHERE id=? AND status='playing'")
+      .run(Date.now(), status, Math.max(0, watchedSeconds), id);
+  }
+  playbackHistory(limit = 200): PlaybackHistoryItem[] {
+    return this.db
+      .prepare("SELECT * FROM playback_history ORDER BY startedAt DESC,id DESC LIMIT ?")
+      .all(limit) as unknown as PlaybackHistoryItem[];
   }
   logs() {
     return this.db

@@ -5,6 +5,17 @@ export const updateHistory = [
   {
     version: "1.4.1",
     date: "Oct 3, 2026",
+    title: "Playback history and dashboard themes",
+    items: [
+      "Playback History records videos only after playback actually begins and keeps the result across restarts",
+      "A small footer toggle switches manually between the dark blue theme and a baby blue light theme",
+      "Series detection choices now use clearer names and explain exactly what the selected option recognizes",
+      "Playlist ordering now uses the highlighted drag-and-drop destination without redundant arrow controls",
+    ],
+  },
+  {
+    version: "1.4.1",
+    date: "Oct 3, 2026",
     title: "Core reliability audit",
     items: [
       "Failed prepared videos are evicted from the rolling cache so one corrupt or incompatible file cannot poison a buffer slot",

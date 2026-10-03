@@ -84,7 +84,10 @@ try {
   await page.getByRole("button", { name: /Filters/ }).click();
   await page.getByText("Queue filters", { exact: true }).waitFor();
   assert.equal(
-    await page.getByLabel("Detection").locator('option[value="strict"]').count(),
+    await page
+      .getByLabel("How should IdleCast recognize episodes?")
+      .locator('option[value="strict"]')
+      .count(),
     1,
   );
   assert.equal(
@@ -114,11 +117,19 @@ try {
     /Test playlist video 1/,
   );
   assert.ok(await page.locator(".drop-ghost.after").isVisible());
-  await page.locator(".playlist-row").first().dispatchEvent("dragend");
-  assert.equal(await page.locator(".drop-ghost").count(), 0);
-  await page
-    .getByRole("button", { name: "Move Test playlist video 1 down" })
-    .click();
+  await page.locator(".playlist-row").evaluateAll((rows) => {
+    const transfer = new DataTransfer();
+    const second = rows[1] as HTMLElement;
+    const bounds = second.getBoundingClientRect();
+    second.dispatchEvent(
+      new DragEvent("drop", {
+        bubbles: true,
+        cancelable: true,
+        clientY: bounds.bottom - 2,
+        dataTransfer: transfer,
+      }),
+    );
+  });
   await page
     .getByText("Queue order saved.")
     .waitFor();
@@ -134,6 +145,14 @@ try {
     .locator(".virtual-list")
     .evaluate((el) => (el.scrollTop = el.scrollHeight));
   await page.getByText("Test playlist video 1000", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "History", exact: true }).click();
+  await page.getByRole("heading", { name: "Playback history" }).waitFor();
+  await page.getByText("No playback yet.", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "Switch to light theme" }).click();
+  assert.equal(
+    await page.locator("html").getAttribute("data-theme"),
+    "light",
+  );
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page
     .getByLabel("YouTube playlist link or ID")

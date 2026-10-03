@@ -19,8 +19,6 @@ import {
   ChevronRight,
   Link,
   Volume2,
-  ChevronUp,
-  ChevronDown,
   GripVertical,
   SlidersHorizontal,
   ClipboardList,
@@ -29,12 +27,15 @@ import {
   Download,
   Database,
   ArrowLeft,
+  History as HistoryIcon,
+  Sun,
+  Moon,
 } from "lucide-react";
 import type { Settings } from "../server/config";
 
 const FILTER_MIN_YEAR = 2011;
 import { APP_VERSION } from "../server/version";
-import type { StoredItem } from "../server/db";
+import type { StoredItem, PlaybackHistoryItem } from "../server/db";
 import { OverlayEditor } from "./OverlayEditor";
 import { Credentials } from "./Credentials";
 import { YouTubeViewer } from "./YouTubeViewer";
@@ -116,6 +117,7 @@ const nav = [
   ["Playlist", ListVideo],
   ["Downloaded Videos", Download],
   ["Settings", Settings2],
+  ["History", HistoryIcon],
   ["Logs", ScrollText],
   ["Updates", ClipboardList],
   ["Health", HeartPulse],
@@ -129,6 +131,10 @@ function App() {
     [configured, setConfigured] = useState<any>({}),
     [items, setItems] = useState<StoredItem[]>([]),
     [logs, setLogs] = useState<any[]>([]),
+    [history, setHistory] = useState<PlaybackHistoryItem[]>([]),
+    [theme, setTheme] = useState<"dark" | "light">(() =>
+      localStorage.getItem("idlecast-theme") === "light" ? "light" : "dark",
+    ),
     [health, setHealth] = useState<any>(null),
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
@@ -177,6 +183,10 @@ function App() {
     }
   }
   useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem("idlecast-theme", theme);
+  }, [theme]);
+  useEffect(() => {
     api("state")
       .then((v) => {
         setState(v);
@@ -211,6 +221,10 @@ function App() {
   useEffect(() => {
     if (!auth) return;
     const update = () => {
+      if (page === "History")
+        api("history")
+          .then(setHistory)
+          .catch((e) => setError(e.message));
       if (page === "Logs")
         api("logs")
           .then(setLogs)
@@ -400,6 +414,8 @@ function App() {
                     ? "See and arrange the files prepared for playback."
                   : page === "Settings"
                     ? "Make this station your own."
+                    : page === "History"
+                      ? "See what played and how each video ended."
                     : page === "Logs"
                       ? "A clear record of what happened."
                       : page === "Updates"
@@ -736,7 +752,7 @@ function App() {
                   Broadcast queue{" "}
                   <span className="count">{state?.count ?? 0}</span>
                 </h2>
-                <p>Drag a video to the highlighted drop marker, or use the arrow buttons · loops continuously</p>
+                <p>Drag a video to the highlighted drop marker · the queue loops continuously</p>
               </div>
               <div className="heading-actions">
                 <button type="button" onClick={() => setFilterOpen((open) => !open)}>
@@ -800,8 +816,6 @@ function App() {
                         item={items[v.index]}
                         index={v.index}
                         active={items[v.index].id === state?.current?.id}
-                        canMoveUp={v.index > 0}
-                        canMoveDown={v.index < items.length - 1}
                         moveDisabled={!!busy || state?.syncing}
                         dragging={draggedId === items[v.index].id}
                         dropEdge={
@@ -1317,6 +1331,39 @@ function App() {
             </div>
           </form>
         )}
+        {page === "History" && (
+          <section className="panel history-panel">
+            <div className="panel-heading">
+              <div>
+                <h2><HistoryIcon size={18} /> Playback history</h2>
+                <p>Videos appear here only after playback really begins.</p>
+              </div>
+              <span className="hint">Latest {history.length} · refreshes every 15s</span>
+            </div>
+            {history.length ? (
+              <div className="history-list">
+                {history.map((entry) => (
+                  <div className="history-row" key={entry.id}>
+                    <time>{new Date(entry.startedAt).toLocaleString()}</time>
+                    <div className="history-title">
+                      <b>{entry.title}</b>
+                      <small>{entry.channel || "Unknown channel"} · watched {time(entry.watchedSeconds)}{entry.duration ? " of " + time(entry.duration) : ""}</small>
+                    </div>
+                    <span className={`history-status status-${entry.status}`}>
+                      {entry.status === "played" ? "Finished" : entry.status === "playing" ? "Playing" : entry.status[0].toUpperCase() + entry.status.slice(1)}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="empty">
+                <HistoryIcon />
+                <h3>No playback yet.</h3>
+                <p>History begins when a video sends its first frame.</p>
+              </div>
+            )}
+          </section>
+        )}
         {page === "Logs" && (
           <section className="panel">
             <div className="panel-heading">
@@ -1456,9 +1503,21 @@ function App() {
           />
         )}
         <footer>
-          <span>
-            <Radio size={14} /> Your playlist. Always live.
-          </span>
+          <div className="footer-left">
+            <button
+              type="button"
+              className="theme-toggle"
+              aria-pressed={theme === "light"}
+              aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} theme`}
+              onClick={() => setTheme((value) => value === "dark" ? "light" : "dark")}
+            >
+              {theme === "dark" ? <Moon size={12} /> : <Sun size={12} />}
+              {theme === "dark" ? "Dark" : "Light"}
+            </button>
+            <span>
+              <Radio size={14} /> Your playlist. Always live.
+            </span>
+          </div>
           <button
             className="footer-logout"
             onClick={() =>
@@ -1692,20 +1751,27 @@ function FilterPanel({
       </div>
 
       <fieldset>
-        <legend>Series playback</legend>
+        <legend>Keep series together</legend>
         <label>
-          Detection
+          How should IdleCast recognize episodes?
           <select
             value={filters.seriesMode}
             onChange={(event) => update({ seriesMode: event.target.value as typeof filters.seriesMode })}
           >
-            <option value="off">Off</option>
-            <option value="strict">Strict episode markers</option>
-            <option value="smart">Smart title matching</option>
+            <option value="off">Do not detect series</option>
+            <option value="strict">Exact episode labels</option>
+            <option value="smart">Flexible title numbers</option>
           </select>
         </label>
+        <p className="hint series-explanation">
+          {filters.seriesMode === "off"
+            ? "Videos are shuffled normally, even when their titles look related."
+            : filters.seriesMode === "strict"
+              ? "Uses clear labels such as Episode 2, Part 3, #4, [5], or (6). This avoids grouping unrelated numbered titles."
+              : "Uses clear episode labels and can also group similar titles ending in numbers. This finds more series, but may occasionally group unrelated videos."}
+        </p>
         <label className="series-limit">
-          Series Continuing limit: <b>{filters.seriesLimit}</b>
+          Maximum videos played together: <b>{filters.seriesLimit}</b>
           <input
             type="range"
             min="2"
@@ -1715,7 +1781,7 @@ function FilterPanel({
           />
         </label>
         <p className="hint">
-          Detects Episode, Part, #1, [1], and (1). Smart mode also detects similar titles ending in numbers. The limit includes the triggering episode; normal selection resumes after that many consecutive parts.
+          This total includes the first video. Normal shuffle resumes when the limit is reached.
         </p>
       </fieldset>
 
@@ -1783,8 +1849,6 @@ function Row({
   item,
   index,
   active = false,
-  canMoveUp = false,
-  canMoveDown = false,
   moveDisabled = false,
   dragging = false,
   dropEdge,
@@ -1798,8 +1862,6 @@ function Row({
   item: StoredItem;
   index: number;
   active?: boolean;
-  canMoveUp?: boolean;
-  canMoveDown?: boolean;
   moveDisabled?: boolean;
   dragging?: boolean;
   dropEdge?: "before" | "after";
@@ -1852,26 +1914,6 @@ function Row({
         {active ? <Volume2 size={17} /> : String(index + 1).padStart(2, "0")}
       </span>
       {onMove && <GripVertical className="drag-handle" size={17} />}
-      {onMove && (
-        <div className="row-actions">
-          <button
-            type="button"
-            aria-label={`Move ${item.title} up`}
-            disabled={moveDisabled || !canMoveUp}
-            onClick={() => onMove(index - 1)}
-          >
-            <ChevronUp size={15} />
-          </button>
-          <button
-            type="button"
-            aria-label={`Move ${item.title} down`}
-            disabled={moveDisabled || !canMoveDown}
-            onClick={() => onMove(index + 1)}
-          >
-            <ChevronDown size={15} />
-          </button>
-        </div>
-      )}
       <div className="thumb">
         {item.thumbnail?.startsWith("https://i.ytimg.com/") ? (
           <img src={item.thumbnail} alt="" loading="lazy" />

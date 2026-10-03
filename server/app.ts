@@ -410,6 +410,14 @@ export function createApp(c: Config, store: Store, engine: Engine) {
     res.json({ ok: true });
   });
   app.get("/api/logs", (_req, res) => res.json(store.logs()));
+  app.get("/api/history", (req, res) => {
+    const parsed = z.object({ limit: z.coerce.number().int().min(1).max(500).default(200) }).strict().safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid history limit" });
+      return;
+    }
+    res.json(store.playbackHistory(parsed.data.limit));
+  });
   let healthCache: { time: number; value: unknown } | null = null;
   app.get("/api/health", async (_req, res) => {
     if (healthCache && Date.now() - healthCache.time < 15000) {

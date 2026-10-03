@@ -885,6 +885,20 @@ export class Engine extends EventEmitter {
       await writeLoadingItem(this.config, item).catch(() => {});
       let idle: ReturnType<typeof standby> | null = null;
       let consumed = false;
+      let historyId: number | null = null;
+      let historyFinished = false;
+      let playbackOffset = resume;
+      const finishHistory = (
+        status: "played" | "skipped" | "failed" | "stopped" | "interrupted",
+      ) => {
+        if (historyId === null || historyFinished) return;
+        this.store.finishPlayback(
+          historyId,
+          status,
+          Math.max(0, this.elapsed - playbackOffset),
+        );
+        historyFinished = true;
+      };
       try {
         source.retain?.([...this.bufferedIds]);
         this.event(
@@ -907,6 +921,7 @@ export class Engine extends EventEmitter {
         this.event(`Transition ${transition}: source prepared (${prepared ? "preloaded" : "resolved"})`);
         const duration = Number(info.format.duration);
         const offset = resume < duration - 1 ? resume : 0;
+        playbackOffset = offset;
         const hasAudio = info.streams.some((x: any) => x.codec_type === "audio");
         const audio = info.streams.find((x: any) => x.codec_type === "audio");
         const outputAudioRate = audioSampleRate(s);
@@ -1016,6 +1031,7 @@ export class Engine extends EventEmitter {
               const n = Number(line.slice(6));
               if (Number.isFinite(n) && n > lastFrame) {
                 if (lastFrame < 0) {
+                  historyId = this.store.startPlayback(item!);
                   const generation = ++this.activationGeneration;
                   const counts = this.store.get<Record<string, number>>(
                     "playCounts",
@@ -1102,17 +1118,20 @@ export class Engine extends EventEmitter {
           throw new Error(reason);
         }
         this.store.success(item.id);
+        finishHistory("played");
         consumed = true;
         this.event("Finished: " + item.title);
       } catch (error) {
         if (signal.aborted) break;
         if (this.skipRequested) {
+          finishHistory("skipped");
           consumed = true;
           this.event("Skipped: " + item.title);
         } else {
           // A source that fails after probing must leave the prepared set too.
           // Otherwise the same corrupt/incompatible cache entry occupies a buffer
           // slot and is retried forever after its cooldown.
+          finishHistory("failed");
           consumed = true;
           this.recordFailure(
             item,
@@ -1129,6 +1148,7 @@ export class Engine extends EventEmitter {
           );
         }
       } finally {
+        finishHistory(signal.aborted ? "stopped" : "interrupted");
         if (this.metadataTimer) clearTimeout(this.metadataTimer);
         this.metadataTimer = null;
         this.activationGeneration += 1;
