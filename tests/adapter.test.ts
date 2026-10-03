@@ -6,9 +6,57 @@ import os from "node:os";
 import { readConfig } from "../server/config.js";
 import {
   ExperimentalYouTubeSource,
+  isRetryableDownloadFailure,
   type PlaylistItem,
 } from "../server/providers.js";
 import { withCancellation } from "../server/process.js";
+test("deterministic downloader failures skip pointless retries", async () => {
+  assert.equal(
+    isRetryableDownloadFailure(
+      "YouTube requires account verification for this request",
+    ),
+    false,
+  );
+  assert.equal(
+    isRetryableDownloadFailure("YouTube rate limit reached; retry later"),
+    false,
+  );
+  assert.equal(isRetryableDownloadFailure("Temporary network failure"), true);
+  const root = await mkdtemp(path.join(os.tmpdir(), "idlecast-auth-failure-"));
+  const c = readConfig({
+    ADMIN_PASSWORD: "test-password-long-enough",
+    DATA_DIR: root,
+    EXPERIMENTAL_YOUTUBE: "true",
+  });
+  let calls = 0;
+  const source = new ExperimentalYouTubeSource(c, async () => {
+    calls++;
+    throw new Error("YouTube requires account verification for this request");
+  });
+  try {
+    await assert.rejects(
+      source.resolve(
+        {
+          id: "auth",
+          videoId: "abcdefghijk",
+          position: 0,
+          title: "Auth test",
+          channel: "",
+          thumbnail: "",
+          available: true,
+          duration: 10,
+        },
+        new AbortController().signal,
+      ),
+      /account verification/,
+    );
+    assert.equal(calls, 1);
+  } finally {
+    await source.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("experimental adapter reports progress, retains five videos, deletes completed media and serializes downloads", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "idlecast-adapter-"));
   const c = readConfig({

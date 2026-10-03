@@ -50,6 +50,12 @@ export function countsTowardFailureHistory(message: string) {
   );
 }
 
+export function pausesDownloadQueue(message: string) {
+  return /account verification|rate limit|media disk is full|required media executable|executable path|cache storage is unavailable/i.test(
+    message,
+  );
+}
+
 export type OutputState = {
   status:
     | "disabled"
@@ -522,14 +528,14 @@ export class Engine extends EventEmitter {
           lastTransportWarning = 0;
         child.stderr?.on("data", (chunk) => {
           if (
-            /overrun|circular buffer|non-monoton|timestamp|drop/i.test(
+            /overrun|circular buffer|non-monoton|discontinu|drop/i.test(
               String(chunk),
             ) &&
-            Date.now() - lastTransportWarning > 15000
+            Date.now() - lastTransportWarning > 300000
           ) {
             lastTransportWarning = Date.now();
             const diagnostic = String(chunk);
-            const reason = /non-monoton|timestamp/i.test(diagnostic)
+            const reason = /non-monoton|discontinu/i.test(diagnostic)
               ? "timestamp discontinuity"
               : /overrun|circular buffer/i.test(diagnostic)
                 ? "UDP buffer overrun"
@@ -626,7 +632,7 @@ export class Engine extends EventEmitter {
               ).catch(() => {});
               if (download?.status === "retrying")
                 this.event(
-                  "Retrying stalled download (attempt " + download.attempt + "/3): " + download.title,
+                  "Retrying download (attempt " + download.attempt + "/3): " + download.title,
                   "warn",
                 );
               else if (download?.status === "failed")
@@ -748,17 +754,23 @@ export class Engine extends EventEmitter {
         this.event();
       } catch (error) {
         if (signal.aborted) throw error;
-        this.recordFailure(
-          item,
-          error instanceof Error ? error.message : "Media download failed",
-        );
+        const message =
+          error instanceof Error ? error.message : "Media download failed";
+        this.recordFailure(item, message);
         this.event(
           "Media failed while buffering: " +
             item.title +
-            " — " +
-            (error instanceof Error ? error.message : "Unknown failure"),
+            " \u2014 " +
+            message,
           "warn",
         );
+        if (pausesDownloadQueue(message)) {
+          this.event(
+            "Buffer refill paused because the downloader needs attention; IdleCast will retry without cycling through every video",
+            "warn",
+          );
+          break;
+        }
       }
     }
     source.retain?.([...this.bufferedIds]);
@@ -888,6 +900,7 @@ export class Engine extends EventEmitter {
       let historyId: number | null = null;
       let historyFinished = false;
       let playbackOffset = resume;
+      let sourceReady = false;
       const finishHistory = (
         status: "played" | "skipped" | "failed" | "stopped" | "interrupted",
       ) => {
@@ -918,6 +931,7 @@ export class Engine extends EventEmitter {
         }
         const file = prepared?.file ?? (await source.resolve(item, clipSignal));
         const info = prepared?.info ?? (await this.probeMedia(file, clipSignal));
+        sourceReady = true;
         this.event(`Transition ${transition}: source prepared (${prepared ? "preloaded" : "resolved"})`);
         const duration = Number(info.format.duration);
         const offset = resume < duration - 1 ? resume : 0;
@@ -1131,21 +1145,28 @@ export class Engine extends EventEmitter {
           // A source that fails after probing must leave the prepared set too.
           // Otherwise the same corrupt/incompatible cache entry occupies a buffer
           // slot and is retried forever after its cooldown.
-          finishHistory("failed");
-          consumed = true;
-          this.recordFailure(
-            item,
+          const message =
             error instanceof Error
               ? error.message
-              : "Media failed; retry in 5 minutes",
-          );
+              : "Media failed; retry in 5 minutes";
+          const pauseQueue = !sourceReady && pausesDownloadQueue(message);
+          finishHistory("failed");
+          consumed = !pauseQueue;
+          this.recordFailure(item, message);
           this.event(
             "Media failed: " +
               item.title +
-              " — " +
-              (error instanceof Error ? error.message : "Unknown failure"),
+              " \u2014 " +
+              message,
             "warn",
           );
+          if (pauseQueue) {
+            this.event(
+              "Playback is holding this position for 60 seconds so a global downloader problem does not cycle through the playlist",
+              "warn",
+            );
+            await delay(60000, signal).catch(() => {});
+          }
         }
       } finally {
         finishHistory(signal.aborted ? "stopped" : "interrupted");
@@ -1166,12 +1187,12 @@ export class Engine extends EventEmitter {
         this.bufferedCount = this.bufferedIds.size;
         await source.remove?.(item.videoId).catch(() => {});
         this.event();
+        // Re-read after resync; advance by identity so changes do not resurrect removed items.
+        const fresh = this.store.all();
+        const at = fresh.findIndex((i) => i.id === item!.id);
+        const next = fresh[(at + 1) % Math.max(1, fresh.length)];
+        this.store.set("cursor", next ? { id: next.id, offset: 0 } : null);
       }
-      // Re-read after resync; advance by identity so changes do not resurrect removed items.
-      const fresh = this.store.all();
-      const at = fresh.findIndex((i) => i.id === item!.id);
-      const next = fresh[(at + 1) % Math.max(1, fresh.length)];
-      this.store.set("cursor", next ? { id: next.id, offset: 0 } : null);
     }
     this.download = null;
     this.event();

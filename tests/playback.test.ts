@@ -12,7 +12,11 @@ import path from "node:path";
 import os from "node:os";
 import { readConfig, defaults } from "../server/config.js";
 import { Store } from "../server/db.js";
-import { Engine, countsTowardFailureHistory } from "../server/engine.js";
+import {
+  Engine,
+  countsTowardFailureHistory,
+  pausesDownloadQueue,
+} from "../server/engine.js";
 import { runCapture, delay } from "../server/process.js";
 import {
   overlay,
@@ -34,6 +38,11 @@ test("systemic download outages do not poison per-video failure history", () => 
   assert.equal(countsTowardFailureHistory("YouTube requires account verification for this request"), false);
   assert.equal(countsTowardFailureHistory("YouTube rate limit reached; retry later"), false);
   assert.equal(countsTowardFailureHistory("Media file cannot be decoded"), true);
+  assert.equal(
+    pausesDownloadQueue("YouTube requires account verification for this request"),
+    true,
+  );
+  assert.equal(pausesDownloadQueue("Media file cannot be decoded"), false);
 });
 
 test("FFmpeg overlay has no background box and has outlined text with an opaque square avatar", async () => {

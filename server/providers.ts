@@ -40,6 +40,11 @@ export type MediaSourceHooks = {
   onDownload?: (activity: DownloadActivity | null) => void;
   onDelete?: (filename: string) => void;
 };
+export function isRetryableDownloadFailure(message: string) {
+  return !/account verification|rate limit|media disk is full|required media executable|executable path|cache limit exceeded|exceeds the configured per-video cache limit|cache storage is unavailable/i.test(
+    message,
+  );
+}
 export interface MediaSourceProvider {
   resolve(item: PlaylistItem, signal: AbortSignal): Promise<string>;
   pin?(id: string): void;
@@ -321,6 +326,9 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
         lastError = error;
         await this.cleanup(root, item.videoId);
         if (signal.aborted) throw error;
+        const message =
+          error instanceof Error ? error.message : "Media download failed";
+        if (!isRetryableDownloadFailure(message)) break;
       }
     }
     const message = lastError instanceof Error ? lastError.message : "Media download failed";

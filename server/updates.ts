@@ -5,6 +5,17 @@ export const updateHistory = [
   {
     version: "1.4.1",
     date: "Oct 3, 2026",
+    title: "Smarter YouTube download recovery",
+    items: [
+      "Global YouTube account-verification failures now pause and retry the same position instead of cycling through the entire playlist",
+      "Deterministic authentication, rate-limit, disk, and configuration failures skip pointless three-attempt retries",
+      "The rolling buffer stops scanning hundreds of videos when the downloader itself needs attention and resumes automatically after recovery",
+      "Transport logging now reports real discontinuity signals with a five-minute duplicate-warning limit",
+    ],
+  },
+  {
+    version: "1.4.1",
+    date: "Oct 3, 2026",
     title: "Playback history and dashboard themes",
     items: [
       "Playback History records videos only after playback actually begins and keeps the result across restarts",
