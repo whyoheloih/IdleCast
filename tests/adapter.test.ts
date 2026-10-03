@@ -57,6 +57,60 @@ test("deterministic downloader failures skip pointless retries", async () => {
   }
 });
 
+test("stale authenticated cookies fall back to public YouTube clients", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "idlecast-cookie-fallback-"));
+  const cookieFile = path.join(root, "youtube-cookies.txt");
+  await writeFile(cookieFile, "# Netscape HTTP Cookie File\n");
+  const c = readConfig({
+    ADMIN_PASSWORD: "test-password-long-enough",
+    DATA_DIR: root,
+    EXPERIMENTAL_YOUTUBE: "true",
+    YTDLP_COOKIES_FILE: cookieFile,
+  });
+  const calls: string[][] = [];
+  const source = new ExperimentalYouTubeSource(c, async (
+    _binary,
+    args,
+  ) => {
+    calls.push(args);
+    if (calls.length === 1)
+      throw new Error("YouTube requires account verification for this request");
+    const template = args[args.indexOf("-o") + 1];
+    await writeFile(template.replace("%(ext)s", "mp4"), "fallback media");
+    return "";
+  });
+  try {
+    const file = await source.resolve(
+      {
+        id: "fallback",
+        videoId: "abcdefghijk",
+        position: 0,
+        title: "Fallback test",
+        channel: "",
+        thumbnail: "",
+        available: true,
+        duration: 10,
+      },
+      new AbortController().signal,
+    );
+    assert.match(file, /abcdefghijk\.720p30\.mp4$/);
+    assert.equal(calls.length, 2);
+    assert.ok(calls[0].includes("--cookies"));
+    assert.equal(
+      calls[0][calls[0].indexOf("--extractor-args") + 1],
+      "youtube:player_client=default,web_embedded",
+    );
+    assert.equal(calls[1].includes("--cookies"), false);
+    assert.equal(
+      calls[1][calls[1].indexOf("--extractor-args") + 1],
+      "youtube:player_client=android_vr,web_embedded",
+    );
+  } finally {
+    await source.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("experimental adapter reports progress, retains five videos, deletes completed media and serializes downloads", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "idlecast-adapter-"));
   const c = readConfig({

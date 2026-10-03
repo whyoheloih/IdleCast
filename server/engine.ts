@@ -636,7 +636,7 @@ export class Engine extends EventEmitter {
                   "warn",
                 );
               else if (download?.status === "failed")
-                this.event("Download failed after 3 attempts: " + download.title + " — " + (download.error ?? "unknown error"), "warn");
+                this.event("Download failed after " + download.attempt + (download.attempt === 1 ? " attempt: " : " attempts: ") + download.title + " — " + (download.error ?? "unknown error"), "warn");
               else this.event();
             },
             onDelete: (filename) => {

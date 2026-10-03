@@ -311,7 +311,9 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
     const cached = await this.cachedFile(root, item.videoId);
     if (cached) return cached;
     let lastError: unknown;
+    let finalAttempt = 0;
     for (let attempt = 1; attempt <= 3; attempt++) {
+      finalAttempt = attempt;
       signal.throwIfAborted();
       if (attempt > 1) {
         this.hooks.onDownload?.(this.activity(item, "retrying", 0, attempt));
@@ -319,7 +321,13 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
       }
       await this.cleanup(root, item.videoId);
       try {
-        const file = await this.downloadAttempt(root, item, limit, attempt, signal);
+        const file = await this.downloadAttempt(
+          root,
+          item,
+          limit,
+          attempt,
+          signal,
+        );
         this.hooks.onDownload?.(this.activity(item, "downloaded", 100, attempt, { bytes: (await stat(file)).size }));
         return file;
       } catch (error) {
@@ -328,21 +336,78 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
         if (signal.aborted) throw error;
         const message =
           error instanceof Error ? error.message : "Media download failed";
+        if (
+          this.c.YTDLP_COOKIES_FILE &&
+          /account verification|sign in|cookies|login required/i.test(message)
+        ) {
+          finalAttempt = Math.max(2, attempt + 1);
+          this.hooks.onDownload?.(
+            this.activity(item, "retrying", 0, finalAttempt),
+          );
+          try {
+            const file = await this.downloadAttempt(
+              root,
+              item,
+              limit,
+              finalAttempt,
+              signal,
+              true,
+            );
+            this.hooks.onDownload?.(
+              this.activity(item, "downloaded", 100, finalAttempt, {
+                bytes: (await stat(file)).size,
+              }),
+            );
+            return file;
+          } catch (fallbackError) {
+            lastError = fallbackError;
+            await this.cleanup(root, item.videoId);
+            if (signal.aborted) throw fallbackError;
+          }
+          break;
+        }
         if (!isRetryableDownloadFailure(message)) break;
       }
     }
     const message = lastError instanceof Error ? lastError.message : "Media download failed";
-    this.hooks.onDownload?.(this.activity(item, "failed", null, 3, { error: message }));
+    this.hooks.onDownload?.(
+      this.activity(item, "failed", null, finalAttempt || 1, {
+        error: message,
+      }),
+    );
     throw new Error(message);
   }
-  private async downloadAttempt(root: string, item: PlaylistItem, limit: number, attempt: number, signal: AbortSignal) {
+  private async downloadAttempt(
+    root: string,
+    item: PlaylistItem,
+    limit: number,
+    attempt: number,
+    signal: AbortSignal,
+    anonymousFallback = false,
+  ) {
     let lastProgress = Date.now();
     let lastBytes = 0;
     let lastPercent = -1;
     this.hooks.onDownload?.(this.activity(item, "downloading", 0, attempt));
     await this.run(
       this.c.YTDLP_PATH,
-      ["--ignore-config", ...(this.c.YTDLP_COOKIES_FILE ? ["--cookies", this.c.YTDLP_COOKIES_FILE] : []),
+      [
+       "--ignore-config",
+       ...(
+         this.c.YTDLP_COOKIES_FILE && !anonymousFallback
+           ? [
+               "--cookies",
+               this.c.YTDLP_COOKIES_FILE,
+               "--extractor-args",
+               "youtube:player_client=default,web_embedded",
+             ]
+           : anonymousFallback
+             ? [
+                 "--extractor-args",
+                 "youtube:player_client=android_vr,web_embedded",
+               ]
+             : []
+       ),
        "--no-playlist", "--newline", "--progress", "--no-color",
        "--progress-template", "download:%(progress._percent_str)s", "--no-cache-dir",
        "--concurrent-fragments", "4", "--buffer-size", "1M", "--no-resize-buffer",

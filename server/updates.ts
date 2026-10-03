@@ -7,6 +7,7 @@ export const updateHistory = [
     date: "Oct 3, 2026",
     title: "Smarter YouTube download recovery",
     items: [
+      "Authenticated downloads use stable YouTube clients, then automatically fall back to public no-cookie clients when exported cookies have expired",
       "Global YouTube account-verification failures now pause and retry the same position instead of cycling through the entire playlist",
       "Deterministic authentication, rate-limit, disk, and configuration failures skip pointless three-attempt retries",
       "The rolling buffer stops scanning hundreds of videos when the downloader itself needs attention and resumes automatically after recovery",
