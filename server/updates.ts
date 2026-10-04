@@ -3,6 +3,18 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.4.2",
+    date: "Oct 4, 2026",
+    title: "Long-download and transition reliability",
+    items: [
+      "Long yt-dlp progress output stays memory-bounded without aborting healthy multi-hour downloads",
+      "Once exported YouTube cookies are rejected, the active download session keeps using the working public-client fallback instead of retrying stale cookies for every video",
+      "Prepared video transitions no longer wait for a remote thumbnail request before starting FFmpeg",
+      "Unused media-source code and imports were removed after strict dead-code analysis",
+      "A real 720p download passed progress, FFprobe, cache reuse, and deletion checks; 72 continuous FFmpeg transitions completed with no failures or output reconnects",
+    ],
+  },
+  {
     version: "1.4.1",
     date: "Oct 3, 2026",
     title: "Lighter countdown transitions",

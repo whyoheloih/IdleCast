@@ -105,6 +105,25 @@ test("stale authenticated cookies fall back to public YouTube clients", async ()
       calls[1][calls[1].indexOf("--extractor-args") + 1],
       "youtube:player_client=android_vr,web_embedded",
     );
+    await source.resolve(
+      {
+        id: "next",
+        videoId: "lmnopqrstuv",
+        position: 1,
+        title: "Next fallback test",
+        channel: "",
+        thumbnail: "",
+        available: true,
+        duration: 10,
+      },
+      new AbortController().signal,
+    );
+    assert.equal(calls.length, 3);
+    assert.equal(calls[2].includes("--cookies"), false);
+    assert.equal(
+      calls[2][calls[2].indexOf("--extractor-args") + 1],
+      "youtube:player_client=android_vr,web_embedded",
+    );
   } finally {
     await source.close();
     await rm(root, { recursive: true, force: true });

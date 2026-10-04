@@ -47,7 +47,6 @@ export function isRetryableDownloadFailure(message: string) {
 }
 export interface MediaSourceProvider {
   resolve(item: PlaylistItem, signal: AbortSignal): Promise<string>;
-  pin?(id: string): void;
   retain?(ids: string[]): void;
   remove?(id: string): Promise<void>;
   close?(): Promise<void>;
@@ -253,13 +252,13 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
   private pending = new Map<string, Promise<string>>();
   private retained = new Set<string>();
   private queue: Promise<unknown> = Promise.resolve();
+  private cookiesRejected = false;
   constructor(
     private c: Config,
     private run: typeof runCapture = runCapture,
     private quality: Pick<Settings, "height" | "fps"> = { height: 720, fps: 30 },
     private hooks: MediaSourceHooks = {},
   ) {}
-  pin(id: string) { this.retain([id]); }
   retain(ids: string[]) { this.retained = new Set(ids.map((id) => this.cacheName(id))); }
   async remove(id: string) {
     const root = path.join(this.c.DATA_DIR, "cache");
@@ -315,7 +314,7 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
     if (cached) return cached;
     let lastError: unknown;
     let finalAttempt = 0;
-    let usePublicClients = !this.c.YTDLP_COOKIES_FILE;
+    let usePublicClients = !this.c.YTDLP_COOKIES_FILE || this.cookiesRejected;
     let retryImmediately = false;
     for (let attempt = 1; attempt <= 3; attempt++) {
       finalAttempt = attempt;
@@ -353,6 +352,7 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
           // A stale authenticated session should not poison the whole queue.
           // Subsequent attempts use public clients and retain ordinary bounded
           // retries for temporary network failures.
+          this.cookiesRejected = true;
           usePublicClients = true;
           retryImmediately = true;
           continue;

@@ -4,7 +4,6 @@ import {
   mkdtemp,
   rm,
   readFile,
-  writeFile,
   mkdir,
   stat,
 } from "node:fs/promises";

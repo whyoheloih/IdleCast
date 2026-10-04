@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -255,4 +255,10 @@ test("media child cancellation and capped reconnect backoff", async () => {
     runCapture("idlecast-no-such-binary", [], new AbortController().signal),
     /could not start/,
   );
+  const largeOutput = await runCapture(
+    process.execPath,
+    ["-e", "process.stdout.write('x'.repeat(1200000))"],
+    new AbortController().signal,
+  );
+  assert.equal(largeOutput.length, 1048576);
 });

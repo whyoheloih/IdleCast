@@ -26,7 +26,6 @@ import {
   prepareQueue,
   isLongVideo,
   canStartShuffledQueue,
-  canFollowInShuffledQueue,
   needsLongDownloadLead,
   DOWNLOAD_LEAD_SECONDS,
   LONG_VIDEO_SECONDS,
@@ -897,7 +896,6 @@ export class Engine extends EventEmitter {
       this.clip = clipController;
       const clipSignal = AbortSignal.any([signal, clipController.signal]);
       this.skipRequested = false;
-      await writeLoadingItem(this.config, item).catch(() => {});
       let idle: ReturnType<typeof standby> | null = null;
       let consumed = false;
       let historyId: number | null = null;
@@ -931,6 +929,9 @@ export class Engine extends EventEmitter {
               "error",
             ),
           );
+          // Keep the outgoing stream alive immediately. A slow thumbnail
+          // request must never delay standby output during recovery.
+          await writeLoadingItem(this.config, item).catch(() => {});
         }
         const file = prepared?.file ?? (await source.resolve(item, clipSignal));
         const info = prepared?.info ?? (await this.probeMedia(file, clipSignal));

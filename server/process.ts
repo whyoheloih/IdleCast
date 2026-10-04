@@ -87,8 +87,12 @@ export async function runCapture(
   child.stdout?.on("data", (chunk) => {
     const text = String(chunk);
     onOutput?.(text);
-    if (output.length < 1048576) output += text;
-    else bounded.abort();
+    // Keep captured output bounded without killing a healthy long-running
+    // process. yt-dlp can emit more than 1 MiB of progress lines while a
+    // multi-hour video downloads; callers that need those updates consume
+    // them incrementally through onOutput.
+    if (output.length < 1048576)
+      output += text.slice(0, 1048576 - output.length);
   });
   const timer = setTimeout(() => bounded.abort(), timeout);
   const monitor = check
