@@ -66,10 +66,6 @@
         "to": "idlecast/media/loading-cat.gif"
       },
       {
-        "from": "media/countdown",
-        "to": "idlecast/media/countdown"
-      },
-      {
         "from": "dist-server/index.cjs",
         "to": "server/index.cjs"
       },

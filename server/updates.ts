@@ -5,6 +5,16 @@ export const updateHistory = [
   {
     version: "1.4.1",
     date: "Oct 3, 2026",
+    title: "Lighter countdown transitions",
+    items: [
+      "Animated countdown GIFs were removed from playback to reduce FFmpeg decoding work at every transition",
+      "The final ten-second text countdown, fade-in, timing, position, and styling remain unchanged",
+      "Desktop builds no longer bundle the unused countdown animation files",
+    ],
+  },
+  {
+    version: "1.4.1",
+    date: "Oct 3, 2026",
     title: "Download system audit and progress repair",
     items: [
       "Real yt-dlp percentage output now updates the download bar instead of leaving it at zero",
