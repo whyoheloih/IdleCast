@@ -8,14 +8,13 @@ import {
 } from "node:crypto";
 import { promisify } from "node:util";
 import path from "node:path";
-import { statfs } from "node:fs/promises";
 import { z } from "zod";
 import { shuffleOrderError } from "./queue.js";
 import type { Config } from "./config.js";
 import { settingsSchema } from "./config.js";
 import { Store } from "./db.js";
 import { Engine } from "./engine.js";
-import { runCapture } from "./process.js";
+import { buildHealth } from "./health.js";
 import { OverlayPreview } from "./preview.js";
 import { credentialStore } from "./credentials.js";
 import { APP_VERSION } from "./version.js";
@@ -424,32 +423,7 @@ export function createApp(c: Config, store: Store, engine: Engine) {
       res.json(healthCache.value);
       return;
     }
-    const controller = new AbortController();
-    const checks = await Promise.all(
-      ["FFMPEG_PATH", "FFPROBE_PATH", "YTDLP_PATH"].map(async (key) => {
-        try {
-          await runCapture(
-            c[key as "FFMPEG_PATH"],
-            [key === "YTDLP_PATH" ? "--version" : "-version"],
-            controller.signal,
-            5000,
-          );
-          return { name: key, ok: true };
-        } catch {
-          return { name: key, ok: false };
-        }
-      }),
-    );
-    const disk = await statfs(c.DATA_DIR);
-    const value = {
-      version: APP_VERSION,
-      uptime: Math.floor(process.uptime()),
-      memoryMB: Math.round(process.memoryUsage().rss / 1048576),
-      freeDiskMB: Math.round((disk.bavail * disk.bsize) / 1048576),
-      database: store.db.prepare("PRAGMA quick_check").get(),
-      checks,
-      ...engine.snapshot(),
-    };
+    const value = await buildHealth(c, store, engine);
     healthCache = { time: Date.now(), value };
     res.json(value);
   });

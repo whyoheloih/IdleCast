@@ -3,6 +3,17 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.4.3",
+    date: "Oct 4, 2026",
+    title: "Health dashboard and precise diagnostics",
+    items: [
+      "A dedicated Health page reports overall and per-system status from live evidence, recent successes, and specific failures",
+      "Sixty-seven stable diagnostic codes identify exact observable failures across downloads, cache, playback, transitions, output, API, authentication, database, playlist, and system components",
+      "Expandable Health details explain each status and provide a sanitized Copy Diagnostic for Codex report",
+      "Diagnostic definitions and Codex investigation rules are documented as a permanent debugging API",
+    ],
+  },
+  {
     version: "1.4.2",
     date: "Oct 4, 2026",
     title: "Long-download and transition reliability",

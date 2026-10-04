@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { defaults, settingsSchema, type Settings } from "./config.js";
 import type { PlaylistItem } from "./providers.js";
+import type { DiagnosticRecord } from "./diagnostics.js";
 export type PlaybackHistoryItem = {
   id: number;
   startedAt: number;
@@ -220,6 +221,14 @@ export class Store {
     return this.db
       .prepare("SELECT * FROM playback_history ORDER BY startedAt DESC,id DESC LIMIT ?")
       .all(limit) as unknown as PlaybackHistoryItem[];
+  }
+  recordDiagnostic(record: DiagnosticRecord) {
+    const records = this.get<DiagnosticRecord[]>("diagnostics", []);
+    records.unshift(record);
+    this.set("diagnostics", records.slice(0, 100));
+  }
+  diagnostics(limit = 50): DiagnosticRecord[] {
+    return this.get<DiagnosticRecord[]>("diagnostics", []).slice(0, limit);
   }
   logs() {
     return this.db

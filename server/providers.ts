@@ -294,8 +294,12 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
     this.hooks.onDelete?.(name);
   }
   private async cleanup(root: string, id: string) {
-    const base = this.cacheName(id) + ".";
-    for (const name of await readdir(root)) if (name.startsWith(base)) await this.removeCached(root, name);
+    try {
+      const base = this.cacheName(id) + ".";
+      for (const name of await readdir(root)) if (name.startsWith(base)) await this.removeCached(root, name);
+    } catch (error) {
+      throw new Error(`Cache cleanup failed: ${error instanceof Error ? error.message : "unknown error"}`);
+    }
   }
   private async download(item: PlaylistItem, signal: AbortSignal) {
     if (!this.c.EXPERIMENTAL_YOUTUBE) throw new Error("Experimental YouTube source is disabled");
@@ -342,8 +346,13 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
         lastError = error;
         await this.cleanup(root, item.videoId);
         if (signal.aborted) throw error;
-        const message =
+        let message =
           error instanceof Error ? error.message : "Media download failed";
+        if (/Required media executable could not start/i.test(message))
+          message = "yt-dlp executable could not start";
+        else if (/Media tool failed/i.test(message))
+          message = "yt-dlp unexpectedly exited non-zero";
+        lastError = new Error(message);
         if (
           this.c.YTDLP_COOKIES_FILE &&
           !usePublicClients &&
@@ -432,7 +441,7 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
           lastProgress = Date.now();
           this.hooks.onDownload?.(this.activity(item, "downloading", null, attempt, { bytes: requestedBytes }));
         }
-        if (Date.now() - lastProgress > 120000) throw new Error("Download stalled with no meaningful progress for 2 minutes");
+        if (Date.now() - lastProgress > 600000) throw new Error("Download stalled with no meaningful progress for 10 minutes");
       },
       (chunk) => {
         for (const match of chunk.matchAll(/idlecast:\s*([0-9.]+)%/g)) {

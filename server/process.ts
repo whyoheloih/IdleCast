@@ -4,6 +4,14 @@ export function mediaFailure(child: ChildProcess): string {
   const text = diagnostics.get(child) ?? "";
   if (/ffmpeg-location.*does not exist|ffmpeg is not installed/i.test(text))
     return "FFmpeg location is invalid; audio and video could not be merged";
+  if (/javascript challenge|signature extraction|nsig|js runtime/i.test(text))
+    return "YouTube JavaScript challenge solving failed";
+  if (/requested format.*not available/i.test(text))
+    return "YouTube requested format is not available";
+  if (/fragment.*(?:retry|fail)|retry.*fragment/i.test(text))
+    return "YouTube fragment retries exhausted";
+  if (/merg|mux|postprocess/i.test(text))
+    return "Downloaded media merge failed";
   if (/sign in|confirm.*bot|cookies|login required/i.test(text))
     return "YouTube requires account verification for this request";
   if (/403|forbidden/i.test(text))
@@ -15,8 +23,10 @@ export function mediaFailure(child: ChildProcess): string {
   if (/No space left|disk full/i.test(text)) return "Media disk is full";
   if (/font|drawtext/i.test(text))
     return "Overlay font or text filter could not load";
-  if (/No such file|Invalid argument|Error opening/i.test(text))
-    return "Media file, executable path, or encoder input is invalid";
+  if (/No such file|Error opening/i.test(text))
+    return "FFmpeg input unavailable";
+  if (/Invalid argument/i.test(text))
+    return "FFmpeg rejected an argument or media format";
   if (/Requested format.*not available/i.test(text))
     return "YouTube has no matching playable format";
   return "Media tool failed; check executable paths, source access, and selected quality";

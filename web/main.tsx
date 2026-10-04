@@ -39,6 +39,7 @@ import type { StoredItem, PlaybackHistoryItem } from "../server/db";
 import { OverlayEditor } from "./OverlayEditor";
 import { Credentials } from "./Credentials";
 import { YouTubeViewer } from "./YouTubeViewer";
+import { HealthPage } from "./HealthPage";
 import { updateCommand, updateHistory } from "../server/updates";
 import "./style.css";
 type Snapshot = {
@@ -1439,54 +1440,7 @@ function App() {
             ))}
           </div>
         )}
-        {page === "Health" &&
-          (health ? (
-            <>
-              <div className="stats">
-                <Metric
-                  label="APP VERSION"
-                  value={health.version}
-                  sub="Single-owner instance"
-                />
-                <Metric
-                  label="UPTIME"
-                  value={time(health.uptime)}
-                  sub="Since process started"
-                />
-                <Metric
-                  label="MEMORY"
-                  value={health.memoryMB + " MB"}
-                  sub="Application resident memory"
-                />
-                <Metric
-                  label="FREE DISK"
-                  value={(health.freeDiskMB / 1024).toFixed(1) + " GB"}
-                  sub="Data volume available space"
-                />
-              </div>
-              <section className="panel form-panel">
-                <h2>Service checks</h2>
-                {health.checks.map((c: any) => (
-                  <Status
-                    key={c.name}
-                    ok={c.ok}
-                    label={c.name.replace("_PATH", "")}
-                  />
-                ))}
-                <Status
-                  ok={health.database?.quick_check === "ok"}
-                  label="SQLite integrity"
-                />
-                <p className="hint">
-                  Output progress means FFmpeg is sending. Confirm broadcast
-                  visibility in YouTube Studio or Twitch. These checks do not
-                  validate account access, stream keys, or viewer playback.
-                </p>
-              </section>
-            </>
-          ) : (
-            <div className="empty">Checking services…</div>
-          ))}
+        {page === "Health" && <HealthPage health={health} onNotice={setNotice} />}
         {settings && (
           <OverlayEditor
             open={overlayEditorOpen}
@@ -1835,17 +1789,12 @@ function Metric({
 function Status({ ok, label }: { ok: boolean; label: string }) {
   return (
     <div className="status-check">
-      {ok ? (
-        <Check size={16} className="accent" />
-      ) : (
-        <AlertTriangle size={16} className="amber" />
-      )}
+      {ok ? <Check size={16} className="accent" /> : <AlertTriangle size={16} className="amber" />}
       <span>{label}</span>
       <small>{ok ? "Configured / available" : "Needs setup"}</small>
     </div>
   );
-}
-function Row({
+}function Row({
   item,
   index,
   active = false,

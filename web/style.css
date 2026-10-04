@@ -1647,3 +1647,69 @@ html[data-theme="light"] .overlay-dialog { background: #f8fbfe; color: #172737; 
   .history-row { grid-template-columns: 1fr auto; gap: 8px 12px; }
   .history-row time { grid-column: 1 / -1; }
 }
+
+/* Health dashboard */
+.health-page { display: flex; flex-direction: column; gap: 20px; }
+.health-overall {
+  display: flex; align-items: center; gap: 14px; padding: 18px 21px;
+  border: 1px solid #34587a; border-radius: 12px; background: #162436;
+}
+.health-overall div { display: flex; flex-direction: column; gap: 3px; }
+.health-overall span { font-size: 9px; letter-spacing: .14em; color: #9eacbc; }
+.health-overall strong { font-size: 25px; letter-spacing: .04em; }
+.health-overall small { margin-left: auto; }
+.health-healthy { --health-color: #68d391; }
+.health-degraded, .health-available, .health-inactive, .health-unknown { --health-color: #ddb575; }
+.health-critical { --health-color: #ee7774; }
+.health-overall { border-color: color-mix(in srgb, var(--health-color) 55%, #2b3038); }
+.health-overall > svg, .health-overall strong { color: var(--health-color); }
+.health-list { overflow: hidden; }
+.health-list .panel-heading { border-bottom: 1px solid #2b3038; }
+.health-item { border-bottom: 1px solid #2b3038; }
+.health-item:last-child { border-bottom: 0; }
+.health-item summary {
+  display: grid; grid-template-columns: 24px minmax(0, 1fr) auto 90px; align-items: center;
+  gap: 12px; min-height: 62px; padding: 8px 22px; cursor: pointer; list-style: none;
+}
+.health-item summary::-webkit-details-marker { display: none; }
+.health-item summary:hover { background: #1d222a; }
+.health-icon { color: var(--health-color); display: flex; }
+.health-name { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.health-name b { font-size: 12px; }
+.health-name small { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.health-code { color: #f1b67c; border: 1px solid #5b4636; background: #251e19; border-radius: 4px; padding: 4px 7px; font: 10px/1.2 ui-monospace, monospace; }
+.health-status { color: var(--health-color); text-transform: uppercase; text-align: right; letter-spacing: .09em; font-size: 9px; font-weight: 700; }
+.health-details { border-top: 1px solid #2b3038; background: #15181e; padding: 18px 22px 22px 58px; }
+.health-details dl { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1px; margin: 0 0 18px; background: #2a3038; }
+.health-details dl div { background: #191c22; padding: 10px 12px; min-width: 0; }
+.health-details dt { color: #8f9aa6; font-size: 9px; letter-spacing: .06em; text-transform: uppercase; }
+.health-details dd { margin: 5px 0 0; overflow-wrap: anywhere; font-size: 11px; }
+.diagnostic-card { border: 1px solid #4d3b31; border-radius: 8px; padding: 16px; background: #1e1917; }
+.diagnostic-heading { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.diagnostic-heading span { color: #ffbd7f; font: 11px ui-monospace, monospace; }
+.diagnostic-heading b { font-size: 12px; }
+.diagnostic-card h3 { margin: 13px 0 4px; color: #aeb7c1; font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+.diagnostic-card p { margin: 0; line-height: 1.65; overflow-wrap: anywhere; }
+.diagnostic-card pre { max-height: 220px; overflow: auto; margin: 0; padding: 10px; border: 1px solid #303741; border-radius: 6px; background: #12151a; color: #c7d2dd; font: 10px/1.55 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.diagnostic-card button { display: inline-flex; align-items: center; gap: 7px; margin-top: 16px; }
+.health-no-diagnostic { margin: 0; }
+html[data-theme="light"] .health-overall { background: #e5f1fa; }
+html[data-theme="light"] .health-list .panel-heading,
+html[data-theme="light"] .health-item,
+html[data-theme="light"] .health-details { border-color: #bfd0de; }
+html[data-theme="light"] .health-item summary:hover { background: #e9f2f8; }
+html[data-theme="light"] .health-details { background: #eef5fa; }
+html[data-theme="light"] .health-details dl { background: #bfd0de; }
+html[data-theme="light"] .health-details dl div { background: #f8fbfe; }
+html[data-theme="light"] .diagnostic-card { background: #fff7f0; border-color: #d7b394; }
+html[data-theme="light"] .diagnostic-card pre { background: #fff; border-color: #c7d4de; color: #23384b; }
+html[data-theme="light"] .health-code { background: #fff5eb; border-color: #d7b394; color: #8a4e1b; }
+@media (max-width: 720px) {
+  .health-item summary { grid-template-columns: 22px minmax(0, 1fr) auto; padding: 10px 14px; }
+  .health-code { grid-column: 2; width: fit-content; }
+  .health-status { grid-column: 3; grid-row: 1; }
+  .health-details { padding: 14px; }
+  .health-details dl { grid-template-columns: 1fr; }
+  .health-overall { align-items: flex-start; }
+  .health-overall small { margin: 3px 0 0 auto; }
+}

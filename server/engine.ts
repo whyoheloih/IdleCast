@@ -31,6 +31,7 @@ import {
   LONG_VIDEO_SECONDS,
 } from "./queue.js";
 import { playlistId as parsePlaylistId } from "./config.js";
+import { diagnosticForMessage, sanitizeDiagnosticRuntime } from "./diagnostics.js";
 import { overlay, overlayLayout } from "./overlay.js";
 import {
   audioSampleRate,
@@ -149,8 +150,25 @@ export class Engine extends EventEmitter {
         void this.sync().catch(() => {});
     }, 60000);
   }
-  event(message?: string, level = "info") {
-    if (message) this.store.log(level, message);
+  event(message?: string, level = "info", runtime: Record<string, unknown> = {}) {
+    if (message) {
+      this.store.log(level, message);
+      const code = diagnosticForMessage(message);
+      if (code)
+        this.store.recordDiagnostic({
+          code,
+          timestamp: Date.now(),
+          observed: String(sanitizeDiagnosticRuntime(message)).slice(0, 1000),
+          runtime: sanitizeDiagnosticRuntime({
+            state: this.state,
+            videoId: this.current?.videoId,
+            videoTitle: this.current?.title,
+            downloadAttempt: this.download?.attempt,
+            outputStates: this.outputs,
+            ...runtime,
+          }) as Record<string, unknown>,
+        });
+    }
     this.emit("change");
   }
   private downloadQueue() {
@@ -308,9 +326,10 @@ export class Engine extends EventEmitter {
             queue.detectedSeries +
             " series detected",
         );
-      } catch {
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : "Unknown synchronization error";
         this.event(
-          "Playlist sync failed; previous snapshot preserved. Check API key, access and quota.",
+          "Playlist sync failed; previous snapshot preserved — " + detail,
           "error",
         );
         throw new Error(
@@ -559,6 +578,11 @@ export class Engine extends EventEmitter {
                 lastProgress = Date.now();
                 const recovered = this.outputs[name].status !== "sending";
                 this.outputs[name].status = "sending";
+                if (recovered) {
+                  const successes = this.store.get<Record<string, number>>("health.lastOutputSuccess", {});
+                  successes[name] = Date.now();
+                  this.store.set("health.lastOutputSuccess", successes);
+                }
                 if (recovered && attempt > 0)
                   this.event(`${name} output recovered and is sending again`);
                 else this.event();
@@ -620,7 +644,16 @@ export class Engine extends EventEmitter {
         : new ExperimentalYouTubeSource(this.config, undefined, s, {
             onDownload: (download) => {
               this.download = download;
-              if (download) this.downloadStates.set(download.videoId, download);
+              if (download) {
+                this.downloadStates.set(download.videoId, download);
+                if (download.status === "downloaded") {
+                  this.store.set("health.lastDownloadSuccess", { time: Date.now(), videoId: download.videoId, title: download.title });
+                  this.store.set("health.consecutiveDownloadFailures", 0);
+                } else if (download.status === "failed") {
+                  this.store.set("health.lastDownloadFailure", { time: Date.now(), videoId: download.videoId, title: download.title, error: download.error, attempt: download.attempt });
+                  this.store.set("health.consecutiveDownloadFailures", this.store.get("health.consecutiveDownloadFailures", 0) + 1);
+                }
+              }
               void writeLoadingStatus(
                 this.config,
                 download,
@@ -735,7 +768,9 @@ export class Engine extends EventEmitter {
           info = await this.probeMedia(file, signal);
         } catch (error) {
           // Never reopen the same corrupt or truncated cache entry forever.
-          await source.remove?.(item.videoId).catch(() => {});
+          await source.remove?.(item.videoId).catch((cleanupError) =>
+            this.event(`Cache cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : "unknown error"}`, "warn", { videoId: item.videoId }),
+          );
           throw error;
         }
         const size = (await stat(file)).size;
@@ -888,6 +923,7 @@ export class Engine extends EventEmitter {
       const resume = item.id === saved?.id ? Math.max(0, saved.offset) : 0;
       const previousVideoId = this.current?.videoId ?? "none";
       const transition = ++this.transitionGeneration;
+      const transitionStartedAt = Date.now();
       this.current = item;
       this.elapsed = resume;
       this.state = "preparing";
@@ -936,6 +972,10 @@ export class Engine extends EventEmitter {
         const file = prepared?.file ?? (await source.resolve(item, clipSignal));
         const info = prepared?.info ?? (await this.probeMedia(file, clipSignal));
         sourceReady = true;
+        const preparationMs = Date.now() - transitionStartedAt;
+
+        if (preparationMs > 30000)
+          this.event(`Transition ${transition}: source preparation took ${preparationMs}ms`, "warn", { preparationMs });
         this.event(`Transition ${transition}: source prepared (${prepared ? "preloaded" : "resolved"})`);
         const duration = Number(info.format.duration);
         const offset = resume < duration - 1 ? resume : 0;
@@ -1005,6 +1045,7 @@ export class Engine extends EventEmitter {
         child.once("close", (exitCode, exitSignal) =>
           this.event(`Transition ${transition}: FFmpeg closed (code ${exitCode ?? "none"}, signal ${exitSignal ?? "none"})`),
         );
+
         this.event(`Transition ${transition} activated ${item.videoId} (FFmpeg PID ${child.pid ?? "unknown"})`);
         this.currentMedia = { file, duration };
         this.state = "playing";
@@ -1033,6 +1074,9 @@ export class Engine extends EventEmitter {
               const n = Number(line.slice(6));
               if (Number.isFinite(n) && n > lastFrame) {
                 if (lastFrame < 0) {
+                  const activatedAt = Date.now();
+                  this.store.set("health.lastTransitionSuccess", { time: activatedAt, videoId: item!.videoId, title: item!.title, preparationMs });
+                  this.store.set("health.lastPlaybackStart", { time: activatedAt, videoId: item!.videoId, title: item!.title, hasAudio, audioSampleRate: audio?.sample_rate ?? null, audioChannels: audio?.channels ?? null });
                   historyId = this.store.startPlayback(item!);
                   const generation = ++this.activationGeneration;
                   const counts = this.store.get<Record<string, number>>(
