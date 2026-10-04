@@ -735,7 +735,14 @@ export class Engine extends EventEmitter {
       );
       try {
         const file = await source.resolve(item, signal);
-        const info = await this.probeMedia(file, signal);
+        let info;
+        try {
+          info = await this.probeMedia(file, signal);
+        } catch (error) {
+          // Never reopen the same corrupt or truncated cache entry forever.
+          await source.remove?.(item.videoId).catch(() => {});
+          throw error;
+        }
         const size = (await stat(file)).size;
         this.preparedMedia.set(item.videoId, { file, info, size });
         this.cachedSizes.set(item.videoId, size);

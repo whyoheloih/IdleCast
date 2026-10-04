@@ -5,6 +5,19 @@ export const updateHistory = [
   {
     version: "1.4.1",
     date: "Oct 3, 2026",
+    title: "Download system audit and progress repair",
+    items: [
+      "Real yt-dlp percentage output now updates the download bar instead of leaving it at zero",
+      "Progress size reports only the active video rather than incorrectly including every cached file",
+      "Corrupt or truncated cached media is deleted after validation failure so it cannot poison later retries",
+      "Public downloads use resilient YouTube clients, and expired-cookie fallback retains bounded network retries",
+      "Each video is limited to half the configured cache while the total rolling cache remains capped",
+      "A real isolated 720p download was verified through progress, FFprobe validation, cache reuse, and deletion",
+    ],
+  },
+  {
+    version: "1.4.1",
+    date: "Oct 3, 2026",
     title: "Smarter YouTube download recovery",
     items: [
       "Authenticated downloads use stable YouTube clients, then automatically fall back to public no-cookie clients when exported cookies have expired",

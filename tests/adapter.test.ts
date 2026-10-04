@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile, readdir } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile, readdir } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
 import { readConfig } from "../server/config.js";
@@ -144,7 +144,7 @@ test("experimental adapter reports progress, retains five videos, deletes comple
         "4",
       );
       assert.equal(args[args.indexOf("--buffer-size") + 1], "1M");
-      onOutput?.("download: 37.5%\n");
+      onOutput?.("idlecast:37.5%\n");
       const template = args[args.indexOf("-o") + 1];
       await writeFile(template.replace("%(ext)s", "mp4"), "test media bytes");
       active--;
@@ -214,6 +214,72 @@ test("experimental adapter reports progress, retains five videos, deletes comple
     const pending = withCancellation(new Promise(() => {}), abort.signal);
     abort.abort();
     await assert.rejects(pending, /Cancelled/);
+  } finally {
+    await source.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("download accounting excludes retained files and reserves half the cache per video", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "idlecast-download-accounting-"));
+  const cache = path.join(root, "cache");
+  await mkdir(cache, { recursive: true });
+  await writeFile(path.join(cache, "lmnopqrstuv.720p30.mp4"), Buffer.alloc(1024 * 1024));
+  const c = readConfig({
+    ADMIN_PASSWORD: "test-password-long-enough",
+    DATA_DIR: root,
+    CACHE_MAX_MB: "100",
+    EXPERIMENTAL_YOUTUBE: "true",
+  });
+  const bytes: number[] = [];
+  let seenArgs: string[] = [];
+  const source = new ExperimentalYouTubeSource(
+    c,
+    async (_binary, args, _signal, _timeout, check, onOutput) => {
+      seenArgs = args;
+      const template = args[args.indexOf("-o") + 1];
+      await writeFile(template.replace("%(ext)s", "part"), "1234567890");
+      await check?.();
+      onOutput?.("idlecast:50%\n");
+      await rm(template.replace("%(ext)s", "part"), { force: true });
+      await writeFile(template.replace("%(ext)s", "mp4"), "finished media");
+      return "";
+    },
+    { height: 720, fps: 30 },
+    {
+      onDownload: (activity) => {
+        if (activity?.bytes !== undefined) bytes.push(activity.bytes);
+      },
+    },
+  );
+  source.retain(["lmnopqrstuv", "abcdefghijk"]);
+  try {
+    await source.resolve(
+      {
+        id: "accounting",
+        videoId: "abcdefghijk",
+        position: 0,
+        title: "Accounting test",
+        channel: "",
+        thumbnail: "",
+        available: true,
+        duration: 10,
+      },
+      new AbortController().signal,
+    );
+    assert.equal(
+      seenArgs[seenArgs.indexOf("--max-filesize") + 1],
+      String(50 * 1024 * 1024),
+    );
+    assert.equal(
+      seenArgs[seenArgs.indexOf("--extractor-args") + 1],
+      "youtube:player_client=android_vr,web_embedded",
+    );
+    assert.ok(bytes.includes(10), "active download bytes should be reported");
+    assert.ok(
+      bytes.every((value) => value < 1024 * 1024),
+      "retained cache files must not inflate active download progress",
+    );
   } finally {
     await source.close();
     await rm(root, { recursive: true, force: true });

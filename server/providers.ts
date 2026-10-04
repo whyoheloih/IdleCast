@@ -303,7 +303,10 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
     if (!/^[A-Za-z0-9_-]{11}$/.test(item.videoId)) throw new Error("Invalid YouTube video identifier");
     const root = path.join(this.c.DATA_DIR, "cache");
     await mkdir(root, { recursive: true });
-    const limit = this.c.CACHE_MAX_MB * 1024 * 1024;
+    const cacheLimit = this.c.CACHE_MAX_MB * 1024 * 1024;
+    // Leave room for the rolling buffer instead of allowing one unusually
+    // large video to consume the entire configured cache.
+    const perVideoLimit = Math.floor(cacheLimit / 2);
     const requested = this.cacheName(item.videoId);
     for (const name of await readdir(root))
       if (![...this.retained].some((base) => name.startsWith(base + ".")) && !name.startsWith(requested + "."))
@@ -312,21 +315,27 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
     if (cached) return cached;
     let lastError: unknown;
     let finalAttempt = 0;
+    let usePublicClients = !this.c.YTDLP_COOKIES_FILE;
+    let retryImmediately = false;
     for (let attempt = 1; attempt <= 3; attempt++) {
       finalAttempt = attempt;
       signal.throwIfAborted();
       if (attempt > 1) {
         this.hooks.onDownload?.(this.activity(item, "retrying", 0, attempt));
-        await delay(Math.min(15000, 3000 * attempt), signal);
+        if (!retryImmediately)
+          await delay(Math.min(15000, 3000 * attempt), signal);
+        retryImmediately = false;
       }
       await this.cleanup(root, item.videoId);
       try {
         const file = await this.downloadAttempt(
           root,
           item,
-          limit,
+          cacheLimit,
+          perVideoLimit,
           attempt,
           signal,
+          usePublicClients,
         );
         this.hooks.onDownload?.(this.activity(item, "downloaded", 100, attempt, { bytes: (await stat(file)).size }));
         return file;
@@ -338,33 +347,15 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
           error instanceof Error ? error.message : "Media download failed";
         if (
           this.c.YTDLP_COOKIES_FILE &&
+          !usePublicClients &&
           /account verification|sign in|cookies|login required/i.test(message)
         ) {
-          finalAttempt = Math.max(2, attempt + 1);
-          this.hooks.onDownload?.(
-            this.activity(item, "retrying", 0, finalAttempt),
-          );
-          try {
-            const file = await this.downloadAttempt(
-              root,
-              item,
-              limit,
-              finalAttempt,
-              signal,
-              true,
-            );
-            this.hooks.onDownload?.(
-              this.activity(item, "downloaded", 100, finalAttempt, {
-                bytes: (await stat(file)).size,
-              }),
-            );
-            return file;
-          } catch (fallbackError) {
-            lastError = fallbackError;
-            await this.cleanup(root, item.videoId);
-            if (signal.aborted) throw fallbackError;
-          }
-          break;
+          // A stale authenticated session should not poison the whole queue.
+          // Subsequent attempts use public clients and retain ordinary bounded
+          // retries for temporary network failures.
+          usePublicClients = true;
+          retryImmediately = true;
+          continue;
         }
         if (!isRetryableDownloadFailure(message)) break;
       }
@@ -380,10 +371,11 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
   private async downloadAttempt(
     root: string,
     item: PlaylistItem,
-    limit: number,
+    cacheLimit: number,
+    perVideoLimit: number,
     attempt: number,
     signal: AbortSignal,
-    anonymousFallback = false,
+    usePublicClients = false,
   ) {
     let lastProgress = Date.now();
     let lastBytes = 0;
@@ -394,14 +386,14 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
       [
        "--ignore-config",
        ...(
-         this.c.YTDLP_COOKIES_FILE && !anonymousFallback
+         this.c.YTDLP_COOKIES_FILE && !usePublicClients
            ? [
                "--cookies",
                this.c.YTDLP_COOKIES_FILE,
                "--extractor-args",
                "youtube:player_client=default,web_embedded",
              ]
-           : anonymousFallback
+           : usePublicClients
              ? [
                  "--extractor-args",
                  "youtube:player_client=android_vr,web_embedded",
@@ -409,9 +401,9 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
              : []
        ),
        "--no-playlist", "--newline", "--progress", "--no-color",
-       "--progress-template", "download:%(progress._percent_str)s", "--no-cache-dir",
+       "--progress-template", "download:idlecast:%(progress._percent_str)s", "--no-cache-dir",
        "--concurrent-fragments", "4", "--buffer-size", "1M", "--no-resize-buffer",
-       "--js-runtimes", "node:" + process.execPath, "--max-filesize", String(limit),
+       "--js-runtimes", "node:" + process.execPath, "--max-filesize", String(perVideoLimit),
        "--socket-timeout", "20", "--retries", "2", "--fragment-retries", "2",
        "--ffmpeg-location", this.c.FFMPEG_PATH, "--merge-output-format", "mp4",
        "-f", "bv*[height<=" + this.quality.height + "]+ba/b[height<=" + this.quality.height + "]",
@@ -421,20 +413,29 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
       signal, 43200000,
       async () => {
         let total = 0;
+        let requestedBytes = 0;
+        const requested = this.cacheName(item.videoId) + ".";
         for (const name of await readdir(root)) {
-          try { total += (await stat(path.join(root, name))).size; }
-          catch (error: any) { if (error.code !== "ENOENT") throw error; }
+          try {
+            const size = (await stat(path.join(root, name))).size;
+            total += size;
+            if (name.startsWith(requested)) requestedBytes += size;
+          } catch (error: any) {
+            if (error.code !== "ENOENT") throw error;
+          }
         }
-        if (total > limit) throw new Error("Media cache limit exceeded");
-        if (total > lastBytes) {
-          lastBytes = total;
+        if (total > cacheLimit) throw new Error("Media cache limit exceeded");
+        if (requestedBytes > perVideoLimit)
+          throw new Error("Video exceeds the configured per-video cache limit");
+        if (requestedBytes > lastBytes) {
+          lastBytes = requestedBytes;
           lastProgress = Date.now();
-          this.hooks.onDownload?.(this.activity(item, "downloading", null, attempt, { bytes: total }));
+          this.hooks.onDownload?.(this.activity(item, "downloading", null, attempt, { bytes: requestedBytes }));
         }
         if (Date.now() - lastProgress > 120000) throw new Error("Download stalled with no meaningful progress for 2 minutes");
       },
       (chunk) => {
-        for (const match of chunk.matchAll(/download:\s*([0-9.]+)%/g)) {
+        for (const match of chunk.matchAll(/idlecast:\s*([0-9.]+)%/g)) {
           const percent = Number(match[1]);
           if (Number.isFinite(percent) && percent > lastPercent) {
             lastPercent = percent;
@@ -446,9 +447,9 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
     );
     const file = await this.cachedFile(root, item.videoId);
     if (!file) throw new Error("Download produced no merged media; check FFmpeg location and cache limit");
-    if ((await stat(file)).size > limit) {
+    if ((await stat(file)).size > perVideoLimit) {
       await this.removeCached(root, path.basename(file));
-      throw new Error("Media exceeds the cache limit");
+      throw new Error("Video exceeds the configured per-video cache limit");
     }
     return file;
   }
