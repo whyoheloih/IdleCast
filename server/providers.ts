@@ -22,6 +22,16 @@ export type PlaylistItem = {
   playCount?: number;
   selectionPenalty?: number;
   liveStatus?: "none" | "live" | "upcoming" | "past";
+  sourceType?: "youtube" | "local";
+  localIdentity?: string;
+  localPath?: string;
+  youtubeVideoId?: string;
+  videoWidth?: number | null;
+  videoHeight?: number | null;
+  frameRate?: string;
+  videoCodec?: string;
+  audioCodec?: string;
+  hasAudio?: boolean;
 };
 export interface PlaylistProvider {
   fetch(playlistId: string, signal: AbortSignal): Promise<PlaylistItem[]>;
@@ -238,13 +248,18 @@ export class LocalMediaSource implements MediaSourceProvider {
   constructor(private root: string) {}
   async resolve(item: PlaylistItem, signal: AbortSignal) {
     signal.throwIfAborted();
-    if (!/^[A-Za-z0-9_-]{1,100}$/.test(item.videoId))
-      throw new Error("Invalid video identifier");
-    for (const ext of ["mp4", "mkv", "webm", "mov"])
-      try {
-        return await containedFile(this.root, item.videoId + "." + ext);
-      } catch {}
-    throw new Error("Local media file is unavailable");
+    if (item.sourceType !== "local" || !item.localPath || !item.localIdentity)
+      throw new Error("Local media item is missing its persistent path identity");
+    try {
+      const base = await realpath(path.resolve(this.root));
+      const file = await realpath(item.localPath);
+      const relative = path.relative(base, file);
+      if (relative.startsWith("..") || path.isAbsolute(relative) || !(await stat(file)).isFile())
+        throw new Error("Local media path is outside the selected folder");
+      return file;
+    } catch (error) {
+      throw new Error(`Local media file missing or external drive disconnected: ${error instanceof Error ? error.message : "unknown error"}`);
+    }
   }
 }
 export class ExperimentalYouTubeSource implements MediaSourceProvider {

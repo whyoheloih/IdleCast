@@ -62,7 +62,7 @@ export const envSchema = z.object({
     .string()
     .default("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"),
   UDP_BASE_PORT: z.coerce.number().int().min(1024).max(65533).default(19000),
-  CACHE_MAX_MB: z.coerce.number().int().min(100).max(100000).default(4096),
+  CACHE_MAX_MB: z.coerce.number().int().min(100).max(100000).default(25600),
 });
 export type Config = z.infer<typeof envSchema>;
 export function readConfig(env: NodeJS.ProcessEnv): Config {
@@ -248,6 +248,7 @@ export const settingsSchema = z
     mediaSource: z
       .enum(["local", "youtube-experimental"])
       .default("youtube-experimental"),
+    localDirectory: z.string().trim().max(32767).default(""),
     resyncMinutes: z.number().int().min(5).max(1440).default(15),
     width: z.union([z.literal(1280), z.literal(1920)]).default(1280),
     height: z.union([z.literal(720), z.literal(1080)]).default(720),

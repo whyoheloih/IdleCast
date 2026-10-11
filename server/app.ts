@@ -288,6 +288,8 @@ export function createApp(c: Config, store: Store, engine: Engine) {
     }
     const previous = store.settings();
     if (
+      parsed.data.mediaSource !== previous.mediaSource ||
+      parsed.data.localDirectory !== previous.localDirectory ||
       parsed.data.playlistId !== previous.playlistId ||
       parsed.data.sourceMode !== previous.sourceMode ||
       parsed.data.channelUrl !== previous.channelUrl ||
@@ -381,6 +383,11 @@ export function createApp(c: Config, store: Store, engine: Engine) {
       return;
     }
     store.order(remaining.map((item) => item.id));
+    if (store.settings().mediaSource === "local") {
+      const currentOrder = remaining.map((item) => item.localIdentity).filter((value): value is string => !!value);
+      const previousOrder = store.get<string[]>("localCatalogOrder", []);
+      store.set("localCatalogOrder", [...currentOrder, ...previousOrder.filter((identity) => !currentOrder.includes(identity))]);
+    }
     if (engine.state !== "stopped") engine.queueChanged();
     engine.event(
       block.length > 1
@@ -388,6 +395,24 @@ export function createApp(c: Config, store: Store, engine: Engine) {
         : "Queue order updated",
     );
     res.json({ ok: true, moved: block.length });
+  });
+  app.get("/api/marathons", (_req, res) => res.json(store.marathons()));
+  app.get("/api/marathons/:id", (req, res) => {
+    const marathon = store.marathon(req.params.id);
+    if (!marathon) return res.status(404).json({ error: "Marathon not found" });
+    res.json(marathon);
+  });
+  app.post("/api/marathons", (req, res) => {
+    const parsed = z.object({ name: z.string().trim().min(1).max(100) }).strict().safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Enter a Marathon name" });
+    const settings = store.settings();
+    const items = store.all();
+    if (!items.length) return res.status(400).json({ error: "Sync media before creating a Marathon snapshot" });
+    const sourceIdentity = settings.mediaSource === "local"
+      ? createHash("sha256").update(path.resolve(settings.localDirectory).toLocaleLowerCase()).digest("hex").slice(0, 32)
+      : createHash("sha256").update(JSON.stringify(settings.sources.length ? settings.sources : [{ kind: settings.sourceMode, value: settings.sourceMode === "channel" ? settings.channelUrl : settings.playlistId }])).digest("hex").slice(0, 32);
+    const boundary = store.get<{ id: string } | null>("cursor", null)?.id ?? null;
+    res.status(201).json(store.createMarathon(parsed.data.name, settings.mediaSource === "local" ? "local" : "youtube", sourceIdentity, items, boundary));
   });
   app.post("/api/sync", async (_req, res) => {
     await engine.sync();

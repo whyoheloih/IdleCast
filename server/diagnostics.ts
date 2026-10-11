@@ -98,6 +98,11 @@ export const DIAGNOSTIC_REGISTRY = {
   "IC-DB-002": d("IC-DB-002", "DATABASE_UNAVAILABLE", "Database", "critical", "The Idlecast database cannot be opened or queried.", "Opening the database or the Health query fails.", ["server/db.ts", "server/index.ts", "server/health.ts"], ["database path", "file permissions", "drive health"]),
   "IC-DB-003": d("IC-DB-003", "DATABASE_OPERATION_FAILED", "Database", "critical", "A runtime SQLite operation failed.", "A database read, write, or transaction throws after startup.", ["server/db.ts", "server/app.ts", "server/engine.ts"], ["operation context", "SQLite error", "concurrent access"]),
 
+  "IC-LOCAL-001": d("IC-LOCAL-001", "LOCAL_FOLDER_UNAVAILABLE", "Local media", "critical", "The configured local media folder cannot be accessed.", "A local catalog scan cannot resolve, stat, or read the configured root directory.", ["server/local-media.ts", "server/engine.ts"], ["configured folder path", "drive availability", "folder permissions"]),
+  "IC-LOCAL-002": d("IC-LOCAL-002", "LOCAL_FILE_MISSING", "Local media", "warning", "A cataloged local video no longer exists at its stored path.", "LocalMediaSource cannot resolve a catalog entry under the configured root.", ["server/providers.ts", "server/engine.ts"], ["stored local identity", "renamed or moved file", "drive availability"]),
+  "IC-LOCAL-003": d("IC-LOCAL-003", "UNSUPPORTED_LOCAL_MEDIA", "Local media", "warning", "A local file has no playable video stream or valid finite duration.", "FFprobe completes but reports no video stream or no finite positive duration.", ["server/local-media.ts"], ["container integrity", "video stream", "duration metadata"]),
+  "IC-LOCAL-004": d("IC-LOCAL-004", "LOCAL_CATALOG_SCAN_FAILED", "Local media", "warning", "IdleCast could not scan part of the configured local media tree.", "Reading a nested directory or an unexpected catalog operation fails while the root remains available.", ["server/local-media.ts", "server/engine.ts"], ["nested folder permissions", "filesystem errors"]),
+  "IC-LOCAL-005": d("IC-LOCAL-005", "LOCAL_FFPROBE_VALIDATION_FAILED", "Local media", "warning", "FFprobe could not inspect a candidate local media file.", "The bounded FFprobe process fails or returns malformed output for a candidate file.", ["server/local-media.ts", "server/process.ts"], ["FFPROBE_PATH", "file readability", "container corruption"]),
   "IC-PL-001": d("IC-PL-001", "PLAYLIST_EMPTY", "Playlist", "critical", "No synchronized playlist items are available for playback.", "The stored playlist count is zero.", ["server/engine.ts", "server/health.ts"], ["configured sources", "last synchronization", "filters"]),
   "IC-PL-002": d("IC-PL-002", "PLAYLIST_SYNC_FAILED", "Playlist", "critical", "Playlist synchronization failed and the previous snapshot was preserved.", "Engine.sync catches a provider/channel/API failure.", ["server/engine.ts", "server/providers.ts"], ["preceding API diagnostic", "source identifiers", "quota"]),
   "IC-PL-003": d("IC-PL-003", "PLAYLIST_HAS_NO_ELIGIBLE_ITEMS", "Playlist", "critical", "The synchronized playlist contains no item eligible under current filters.", "Synchronization completes with zero queued items while source data contained excluded items.", ["server/queue.ts", "server/engine.ts", "server/health.ts"], ["filter statistics", "Shorts setting", "duration/year bounds"]),
@@ -130,6 +135,11 @@ export function sanitizeDiagnosticRuntime(value: unknown): unknown {
 }
 
 const matchers: Array<[DiagnosticCode, RegExp]> = [
+  ["IC-LOCAL-001", /local media folder unavailable/i],
+  ["IC-LOCAL-002", /local media file missing/i],
+  ["IC-LOCAL-003", /unsupported local media/i],
+  ["IC-LOCAL-004", /local catalog scan failed/i],
+  ["IC-LOCAL-005", /local ffprobe validation failed/i],
   ["IC-TRANS-002", /transition .*standby encoder failed/i],
   ["IC-TRANS-003", /transition .*ffmpeg error/i],
   ["IC-TRANS-004", /transition .*active producer stalled/i],

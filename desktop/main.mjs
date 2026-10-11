@@ -120,7 +120,7 @@ function ensureDesktopRuntime() {
         "PORT=3000",
         "DATA_DIR=./data",
         "MEDIA_DIR=./media",
-        "CACHE_MAX_MB=4096",
+        "CACHE_MAX_MB=25600",
         "UDP_BASE_PORT=19000",
         "",
       ].join("\n"),

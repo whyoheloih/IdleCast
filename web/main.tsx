@@ -108,11 +108,10 @@ async function api(url: string, method = "GET", body?: unknown) {
 const time = (n: number) =>
   new Date(Math.max(0, n) * 1000).toISOString().slice(11, 19);
 const hasQueueSource = (settings: Settings | null) =>
-  !!settings &&
-  (settings.sources.some((source) => source.value.trim()) ||
-    (settings.sourceMode === "channel"
-      ? !!settings.channelUrl.trim()
-      : !!settings.playlistId.trim()));
+  !!settings && (settings.mediaSource === "local"
+    ? !!settings.localDirectory.trim()
+    : settings.sources.some((source) => source.value.trim()) ||
+      (settings.sourceMode === "channel" ? !!settings.channelUrl.trim() : !!settings.playlistId.trim()));
 const nav = [
   ["Overview", LayoutDashboard],
   ["Playlist", ListVideo],
@@ -458,7 +457,7 @@ function App() {
             {notice}
           </div>
         )}
-        {(!configured.youtubeApi || !hasQueueSource(settings)) && (
+        {(((settings?.mediaSource !== "local" && !configured.youtubeApi) || !hasQueueSource(settings))) && (
           <div className="setup-banner">
             <Link />
             <div>
@@ -773,11 +772,7 @@ function App() {
                   }
                 >
                   <RefreshCw size={16} className={state?.syncing ? "spin" : ""} />
-                  {state?.syncing
-                    ? "Syncing…"
-                    : settings?.shuffle
-                      ? "Reshuffle"
-                      : "Sync now"}
+                  {state?.syncing ? "Syncing…" : settings?.mediaSource === "local" ? "Scan folder" : settings?.shuffle ? "Reshuffle" : "Sync now"}
                 </button>
               </div>
             </div>
@@ -1062,23 +1057,26 @@ function App() {
                     })
                   }
                 >
-                  <option value="youtube-experimental">
-                    YouTube — experimental
-                  </option>
-                  <option value="local">Local files — optional</option>
+                  <option value="youtube-experimental">YouTube Mode</option>
+                  <option value="local">Local Files Only</option>
                 </select>
               </label>
-              <p className="hint">
-                The official API supplies titles and order. The experimental
-                yt-dlp adapter downloads playable videos into a size-limited
-                cache. Use media you are authorized to broadcast. Restricted or
-                unavailable videos may fail.
-              </p>
-              <Status ok={configured.youtubeApi} label="YouTube Data API key" />
-              <Status
-                ok={configured.experimental}
-                label="Experimental YouTube adapter"
-              />
+              {settings.mediaSource === "local" && (
+                <label>
+                  Local media folder
+                  <input value={settings.localDirectory} onChange={(e) => change({ localDirectory: e.target.value })} placeholder={"E:\\IdleCast Media"} />
+                  <span className="hint">IdleCast scans this folder and nested folders. Original files are played in place and never moved or deleted.</span>
+                </label>
+              )}
+              {settings.mediaSource === "local" ? (
+                <p className="hint">Local playback does not use the YouTube API or yt-dlp. Rescan after adding, moving, or renaming files.</p>
+              ) : (
+                <>
+                  <p className="hint">The official API supplies titles and order. The yt-dlp adapter downloads playable videos into a size-limited cache. Use media you are authorized to broadcast.</p>
+                  <Status ok={configured.youtubeApi} label="YouTube Data API key" />
+                  <Status ok={configured.experimental} label="YouTube media adapter" />
+                </>
+              )}
               <label>
                 Resync interval (minutes)
                 <input

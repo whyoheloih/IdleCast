@@ -183,6 +183,7 @@ export function estimatedDownloadGb(item: PlaylistItem, settings: Settings) {
 function filterReasons(item: PlaylistItem, settings: Settings) {
   const reasons: string[] = [];
   const filters = settings.filters;
+  const local = item.sourceType === "local";
   const title = item.title.toLocaleLowerCase();
   if (
     settings.excludedWords.some((word) =>
@@ -192,11 +193,11 @@ function filterReasons(item: PlaylistItem, settings: Settings) {
     reasons.push("title words");
   const year = Number(item.publishedAt?.slice(0, 4));
   const maximumYear = filters.yearMax ?? new Date().getFullYear();
-  if (!Number.isInteger(year) || year < filters.yearMin || year > maximumYear)
+  if (!local && (!Number.isInteger(year) || year < filters.yearMin || year > maximumYear))
     reasons.push("upload year");
-  if (item.liveStatus === "live") reasons.push("current livestream");
-  if (item.liveStatus === "upcoming") reasons.push("upcoming livestream");
-  if (item.liveStatus === "past" && !filters.includePastLivestreams)
+  if (!local && item.liveStatus === "live") reasons.push("current livestream");
+  if (!local && item.liveStatus === "upcoming") reasons.push("upcoming livestream");
+  if (!local && item.liveStatus === "past" && !filters.includePastLivestreams)
     reasons.push("past livestream");
   if (
     item.duration === null ||
@@ -204,14 +205,15 @@ function filterReasons(item: PlaylistItem, settings: Settings) {
     (filters.durationMaxSeconds !== null && item.duration > filters.durationMaxSeconds)
   )
     reasons.push("duration");
-  if (!filters.includeShorts && item.isShort)
+  if (!local && !filters.includeShorts && item.isShort)
     reasons.push("YouTube Shorts");
-  if (filters.excludeRegionRestricted && item.regionRestricted)
+  if (!local && filters.excludeRegionRestricted && item.regionRestricted)
     reasons.push("regional restriction");
-  if (filters.excludeNotEmbeddable && item.embeddable === false)
+  if (!local && filters.excludeNotEmbeddable && item.embeddable === false)
     reasons.push("not embeddable");
   const size = estimatedDownloadGb(item, settings);
   if (
+    !local &&
     filters.maxEstimatedSizeGb > 0 &&
     (size === null || size > filters.maxEstimatedSizeGb)
   )

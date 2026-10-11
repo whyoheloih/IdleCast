@@ -32,6 +32,7 @@ import {
 } from "./queue.js";
 import { playlistId as parsePlaylistId } from "./config.js";
 import { diagnosticForMessage, sanitizeDiagnosticRuntime } from "./diagnostics.js";
+import { LocalFolderPlaylistProvider, type KnownYouTubeMetadata } from "./local-media.js";
 import { overlay, overlayLayout } from "./overlay.js";
 import {
   audioSampleRate,
@@ -41,13 +42,13 @@ import {
   writeLoadingStatus,
 } from "./encoder.js";
 export function countsTowardFailureHistory(message: string) {
-  return !/account verification|rate limit|media disk is full|required media executable|executable path|download stalled|media operation timed out|cache storage is unavailable/i.test(
+  return !/account verification|rate limit|media disk is full|required media executable|executable path|download stalled|media operation timed out|cache storage is unavailable|local media folder unavailable|external drive disconnected|local media file missing/i.test(
     message,
   );
 }
 
 export function pausesDownloadQueue(message: string) {
-  return /account verification|rate limit|media disk is full|required media executable|executable path|cache storage is unavailable/i.test(
+  return /account verification|rate limit|media disk is full|required media executable|executable path|cache storage is unavailable|local media folder unavailable|external drive disconnected|local media file missing/i.test(
     message,
   );
 }
@@ -143,8 +144,8 @@ export class Engine extends EventEmitter {
     this.resyncTimer = setInterval(() => {
       const s = store.settings();
       if (
-        (s.sources.length ||
-          (s.sourceMode === "channel" ? s.channelUrl : s.playlistId)) &&
+        (s.mediaSource === "local" ? !!s.localDirectory :
+          (s.sources.length || (s.sourceMode === "channel" ? s.channelUrl : s.playlistId))) &&
         Date.now() - store.get("lastSync", 0) > s.resyncMinutes * 60000
       )
         void this.sync().catch(() => {});
@@ -236,64 +237,51 @@ export class Engine extends EventEmitter {
     };
   }
   sync(): Promise<void> {
-    if (this.closed)
-      return Promise.reject(new Error("Service is shutting down"));
+    if (this.closed) return Promise.reject(new Error("Service is shutting down"));
     if (this.syncTask) return this.syncTask;
     const settings = this.store.settings();
-    const id =
-      settings.sourceMode === "channel"
-        ? settings.channelUrl
-        : settings.playlistId;
-    if (!id && !settings.sources.length)
-      return Promise.reject(new Error("Configure a playlist or channel first"));
+    const localMode = settings.mediaSource === "local";
+    const id = settings.sourceMode === "channel" ? settings.channelUrl : settings.playlistId;
+    if (localMode ? !settings.localDirectory.trim() : (!id && !settings.sources.length))
+      return Promise.reject(new Error(localMode ? "Choose a local media folder first" : "Configure a playlist or channel first"));
     this.syncing = true;
     this.event();
     this.syncTask = (async () => {
       try {
-        const provider =
-          this.dependencies.playlist ??
-          new YouTubePlaylistProvider(this.config.YOUTUBE_API_KEY);
-        const sources = settings.sources.length
-          ? settings.sources
-          : [{ kind: settings.sourceMode, value: id }];
-        const unique = new Map<string, StoredItem>();
-        for (const source of sources) {
-          const playlistId =
-            source.kind === "channel"
-              ? await new YouTubePlaylistProvider(
-                  this.config.YOUTUBE_API_KEY,
-                ).channelUploads(source.value, this.syncAbort.signal)
+        let fetched: StoredItem[];
+        if (localMode) {
+          const provider = new LocalFolderPlaylistProvider(
+            settings.localDirectory,
+            this.config.FFPROBE_PATH,
+            this.store.get<string[]>("localCatalogOrder", []),
+            this.store.get<KnownYouTubeMetadata>("youtubeMetadata", {}),
+          );
+          fetched = await provider.fetch(settings.localDirectory, this.syncAbort.signal) as StoredItem[];
+          this.store.set("localCatalogOrder", provider.catalogOrder);
+          for (const issue of provider.issues)
+            this.event(issue.message, "warn", { localPath: issue.file });
+        } else {
+          const provider = this.dependencies.playlist ?? new YouTubePlaylistProvider(this.config.YOUTUBE_API_KEY);
+          const sources = settings.sources.length ? settings.sources : [{ kind: settings.sourceMode, value: id }];
+          const unique = new Map<string, StoredItem>();
+          for (const source of sources) {
+            const playlistId = source.kind === "channel"
+              ? await new YouTubePlaylistProvider(this.config.YOUTUBE_API_KEY).channelUploads(source.value, this.syncAbort.signal)
               : parsePlaylistId(source.value);
-          for (const item of await provider.fetch(
-            playlistId,
-            this.syncAbort.signal,
-          ))
-            if (!unique.has(item.videoId))
-              unique.set(item.videoId, item as StoredItem);
+            for (const item of await provider.fetch(playlistId, this.syncAbort.signal))
+              if (!unique.has(item.videoId)) unique.set(item.videoId, { ...item, sourceType: "youtube", youtubeVideoId: item.videoId } as StoredItem);
+          }
+          fetched = [...unique.values()];
+          const known = this.store.get<KnownYouTubeMetadata>("youtubeMetadata", {});
+          for (const item of fetched) known[item.videoId] = { title: item.title, channel: item.channel, thumbnail: item.thumbnail, publishedAt: item.publishedAt ?? "", duration: item.duration };
+          this.store.set("youtubeMetadata", known);
         }
-        const fetched = [...unique.values()];
-        const failureHistory = this.store.get<Record<string, number>>(
-          "failureHistory",
-          {},
-        );
-        const existingFailures = new Map(
-          this.store
-            .all()
-            .map((item) => [item.videoId, item.failures] as const),
-        );
-        const playCounts = this.store.get<Record<string, number>>(
-          "playCounts",
-          {},
-        );
-        const selectionPenalties = this.store.get<Record<string, number>>(
-          "selectionPenalties",
-          {},
-        );
+        const failureHistory = this.store.get<Record<string, number>>("failureHistory", {});
+        const existingFailures = new Map(this.store.all().map((item) => [item.videoId, item.failures] as const));
+        const playCounts = this.store.get<Record<string, number>>("playCounts", {});
+        const selectionPenalties = this.store.get<Record<string, number>>("selectionPenalties", {});
         for (const item of fetched) {
-          item.failureCount =
-            failureHistory[item.videoId] ??
-            existingFailures.get(item.videoId) ??
-            0;
+          item.failureCount = failureHistory[item.videoId] ?? existingFailures.get(item.videoId) ?? 0;
           item.playCount = playCounts[item.videoId] ?? 0;
           item.selectionPenalty = selectionPenalties[item.videoId] ?? 0;
         }
@@ -305,36 +293,15 @@ export class Engine extends EventEmitter {
           this.store.set("shuffleShortStartsRemaining", 2);
           this.store.set("lastVideoDuration", null);
         }
-        this.store.set(
-          "uploadDates",
-          Object.fromEntries(
-            fetched.map((item) => [item.videoId, item.publishedAt ?? ""]),
-          ),
-        );
+        this.store.set("uploadDates", Object.fromEntries(fetched.map((item) => [item.videoId, item.publishedAt ?? ""])));
         this.store.set("excludedCount", queue.excluded);
         this.store.set("selectionPenalties", queue.penalties);
-        this.store.set("filterStats", {
-          reasons: queue.reasons,
-          detectedSeries: queue.detectedSeries,
-        });
-        this.event(
-          "Playlist synchronized: " +
-            queue.items.length +
-            " items; " +
-            queue.excluded +
-            " excluded; " +
-            queue.detectedSeries +
-            " series detected",
-        );
+        this.store.set("filterStats", { reasons: queue.reasons, detectedSeries: queue.detectedSeries });
+        this.event(`${localMode ? "Local folder scanned" : "Playlist synchronized"}: ${queue.items.length} items; ${queue.excluded} excluded; ${queue.detectedSeries} series detected`);
       } catch (error) {
         const detail = error instanceof Error ? error.message : "Unknown synchronization error";
-        this.event(
-          "Playlist sync failed; previous snapshot preserved — " + detail,
-          "error",
-        );
-        throw new Error(
-          "Playlist sync failed; check API key, access and quota",
-        );
+        this.event(`${localMode ? "Local catalog scan" : "Playlist sync"} failed; previous snapshot preserved — ${detail}`, "error");
+        throw new Error(`${localMode ? "Local catalog scan" : "Playlist sync"} failed — ${detail}`);
       } finally {
         this.syncing = false;
         this.syncTask = null;
@@ -348,7 +315,7 @@ export class Engine extends EventEmitter {
     if (this.task) return;
     const s = this.store.settings();
     if (!this.store.count())
-      throw new Error("Sync a nonempty playlist before starting");
+      throw new Error(s.mediaSource === "local" ? "Scan a nonempty local media folder before starting" : "Sync a nonempty playlist before starting");
     if (!s.youtube.enabled && !s.twitch.enabled)
       throw new Error("Enable at least one destination");
     for (const name of ["youtube", "twitch"] as const)
@@ -640,7 +607,7 @@ export class Engine extends EventEmitter {
     return (
       this.dependencies.source ??
       (s.mediaSource === "local"
-        ? new LocalMediaSource(this.config.MEDIA_DIR)
+        ? new LocalMediaSource(s.localDirectory)
         : new ExperimentalYouTubeSource(this.config, undefined, s, {
             onDownload: (download) => {
               this.download = download;
@@ -951,11 +918,7 @@ export class Engine extends EventEmitter {
       };
       try {
         source.retain?.([...this.bufferedIds]);
-        this.event(
-          "Preparing media: " +
-            item.title +
-            ". The complete video is downloaded before playback.",
-        );
+        this.event("Preparing media: " + item.title + (item.sourceType === "local" ? ". Validating the original local file before playback." : ". The complete video is downloaded before playback."));
         const prepared = this.preparedMedia.get(item.videoId);
         if (!prepared) {
           this.event(`Transition ${transition}: source is not preloaded; standby fallback started`, "warn");
@@ -1193,7 +1156,7 @@ export class Engine extends EventEmitter {
           );
           if (pauseQueue) {
             this.event(
-              "Playback is holding this position for 60 seconds so a global downloader problem does not cycle through the playlist",
+              item.sourceType === "local" ? "Playback is holding this position for 60 seconds while the local folder or drive is unavailable" : "Playback is holding this position for 60 seconds so a global downloader problem does not cycle through the playlist",
               "warn",
             );
             await delay(60000, signal).catch(() => {});

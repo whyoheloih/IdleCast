@@ -107,7 +107,7 @@ Credentials come from encrypted in-app storage or the environment fallback and a
 | `COOKIE_SECURE`                             | false for loopback, true with remote HTTPS                                |
 | `DATA_DIR`                                  | `./data`; Compose uses `/app/data`                                        |
 | `MEDIA_DIR`                                 | `./media`; optional local media and avatar images                         |
-| `CACHE_MAX_MB`                              | 4096; each completed item limited to half the cache                       |
+| `CACHE_MAX_MB`                              | 25600; each completed item limited to half the cache                      |
 | `UDP_BASE_PORT`                             | 19000; two loopback-only receiver ports                                   |
 | `FFMPEG_PATH`, `FFPROBE_PATH`, `YTDLP_PATH` | Executable locations                                                      |
 | `FONT_FILE`                                 | DejaVu Sans in Docker; adjust for native installations                    |
