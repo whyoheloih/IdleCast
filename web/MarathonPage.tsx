@@ -44,6 +44,9 @@ type Preview = Constraints & {
   valid: boolean;
 };
 
+type MarathonHistory = Marathon & { unplayedEntries: number };
+type MarathonHistoryRecord = MarathonRecord & { unplayedEntries: number };
+
 async function request(url: string, method = "GET", body?: unknown) {
   const response = await fetch("/api/" + url, {
     method,
@@ -152,9 +155,13 @@ export function MarathonPage({
   const [pending, setPending] = useState("");
   const [message, setMessage] = useState("");
   const [problem, setProblem] = useState("");
+  const [history, setHistory] = useState<MarathonHistory[]>([]);
+  const [historyDetail, setHistoryDetail] = useState<MarathonHistoryRecord | null>(null);
+  const [confirmEnd, setConfirmEnd] = useState(false);
 
   const selectedLocalTime = combineLocal(selectedDate, hour, minute, period);
-  const activeRecord = current ?? record;
+  const activeRecord = record && (!current || record.marathon.id === current.marathon.id) ? record : current ?? record;
+  const controllingRecord = current ? activeRecord : null;
   const entries = activeRecord?.entries ?? [];
   const marathon = activeRecord?.marathon ?? null;
 
@@ -167,6 +174,10 @@ export function MarathonPage({
     }
   };
 
+  const refreshHistory = async () => {
+    setHistory((await request("marathon-history?limit=100")) as MarathonHistory[]);
+  };
+
   useEffect(() => {
     setRecord(current);
     if (current?.selectedLocalTime) {
@@ -177,10 +188,13 @@ export function MarathonPage({
       setPeriod(parts.period);
     }
     if (current?.marathon.schedulingMethod) setMethod(current.marathon.schedulingMethod);
-  }, [current?.marathon.id, current?.marathon.scheduleUpdatedAt]);
+  }, [current?.marathon.id, current?.marathon.scheduleUpdatedAt, current?.marathon.status, current?.marathon.currentPosition, current?.marathon.completedEntries]);
 
   useEffect(() => {
     void refreshDrafts().catch((error) => setProblem(error.message));
+    void refreshHistory().catch((error) => setProblem(error.message));
+    const timer = window.setInterval(() => void refreshHistory().catch(() => {}), 15000);
+    return () => window.clearInterval(timer);
   }, []);
 
   useEffect(() => {
@@ -225,8 +239,8 @@ export function MarathonPage({
     setPending("snapshot");
     setProblem("");
     try {
-      const created = await request("marathons", "POST", { name });
-      setRecord(created);
+      const created = (await request("marathons", "POST", { name })) as Marathon;
+      setRecord(await request("marathons/" + created.id));
       setMessage("Marathon snapshot created in the exact current order.");
       await refreshDrafts();
     } catch (error) {
@@ -277,6 +291,30 @@ export function MarathonPage({
       return;
     }
     setRecord(await request("marathons/" + id));
+  };
+
+  const endMarathon = async () => {
+    if (!marathon || marathon.status !== "active") return;
+    setPending("end");
+    setProblem("");
+    try {
+      const value = (await request(`marathons/${marathon.id}/end`, "POST")) as MarathonRecord;
+      setRecord(value);
+      setConfirmEnd(false);
+      setMessage("Marathon is ending. The current video will finish while the normal queue is prepared.");
+      await refreshHistory();
+      onRefresh();
+    } catch (error) {
+      setProblem(error instanceof Error ? error.message : "Could not end Marathon");
+    } finally {
+      setPending("");
+    }
+  };
+
+  const openHistory = async (id: string) => {
+    setProblem("");
+    try { setHistoryDetail(await request("marathon-history/" + id)); }
+    catch (error) { setProblem(error instanceof Error ? error.message : "Could not load Marathon History"); }
   };
 
   const sourceLabel = settings.mediaSource === "local"
@@ -370,24 +408,32 @@ export function MarathonPage({
           </div>
         </div>
 
-        {current && (
+        {controllingRecord && (
           <div className="current-marathon-card">
             <div>
-              <span className="eyebrow">{current.marathon.status === "active" ? "LIVE MARATHON" : "CURRENT SCHEDULE"}</span>
-              <h3>{current.marathon.name}</h3>
+              <span className="eyebrow">{controllingRecord.marathon.status === "active" ? "LIVE MARATHON" : controllingRecord.marathon.status === "ending" ? "ENDING MARATHON" : "CURRENT SCHEDULE"}</span>
+              <h3>{controllingRecord.marathon.name}</h3>
               <p>
-                {current.marathon.status === "active"
-                  ? `Entry ${current.marathon.currentPosition + 1} of ${current.marathon.totalEntries}`
-                  : `Begins ${clock(current.marathon.scheduledStart)}`}
+                {controllingRecord.marathon.status === "active"
+                  ? `Entry ${controllingRecord.marathon.currentPosition + 1} of ${controllingRecord.marathon.totalEntries}`
+                  : controllingRecord.marathon.status === "ending"
+                    ? "The current video will finish before normal playback resumes."
+                    : `Begins ${clock(controllingRecord.marathon.scheduledStart)}`}
               </p>
             </div>
             <div className="marathon-live-stats">
-              <span><b>{current.marathon.completedEntries}</b><small>complete</small></span>
-              <span><b>{current.marathon.totalEntries}</b><small>total</small></span>
-              <span><b>{duration(current.marathon.totalRuntime)}</b><small>runtime</small></span>
+              <span><b>{controllingRecord.marathon.completedEntries}</b><small>complete</small></span>
+              <span><b>{controllingRecord.marathon.totalEntries}</b><small>total</small></span>
+              <span><b>{duration(controllingRecord.marathon.totalRuntime)}</b><small>runtime</small></span>
             </div>
-            {current.marathon.status === "scheduled" && (
+            {controllingRecord.marathon.status === "scheduled" && (
               <button type="button" onClick={() => void cancel()} disabled={!!pending}>Cancel schedule</button>
+            )}
+            {controllingRecord.marathon.status === "active" && (
+              <button type="button" className="end-marathon-button" onClick={() => setConfirmEnd(true)} disabled={!!pending}>End Marathon</button>
+            )}
+            {controllingRecord.marathon.status === "ending" && (
+              <button type="button" className="end-marathon-button" disabled>Finishing current video…</button>
             )}
           </div>
         )}
@@ -512,9 +558,73 @@ export function MarathonPage({
           </>
         )}
 
+        <div className="marathon-history">
+          <div className="marathon-preview-heading">
+            <div><span className="eyebrow">PAST MARATHONS</span><h3>Marathon History</h3></div>
+            <span>{history.length} saved</span>
+          </div>
+          {history.length ? (
+            <div className="marathon-history-list">
+              {history.map((past) => (
+                <button type="button" key={past.id} onClick={() => void openHistory(past.id)}>
+                  <span><b>{past.name}</b><small>{past.sourceLabel || (past.sourceType === "local" ? "Local collection" : "YouTube collection")}</small></span>
+                  <span><b>{clock(past.actualEnd ?? past.actualStart ?? past.createdAt)}</b><small>{past.status.replace("_", " ")}</small></span>
+                  <span><b>{past.completedEntries} / {past.totalEntries}</b><small>videos completed</small></span>
+                  <span><b>{duration(past.totalRuntime)}</b><small>planned runtime</small></span>
+                </button>
+              ))}
+            </div>
+          ) : <p className="empty-history">Completed, ended, failed, and cancelled Marathons will appear here.</p>}
+        </div>
+
+        {historyDetail && (
+          <div className="marathon-history-detail">
+            <div className="marathon-preview-heading">
+              <div><span className="eyebrow">HISTORY DETAILS</span><h3>{historyDetail.marathon.name}</h3></div>
+              <button type="button" onClick={() => setHistoryDetail(null)}>Close</button>
+            </div>
+            <div className="history-facts">
+              <span><small>Final status</small><b>{historyDetail.marathon.status.replace("_", " ")}</b></span>
+              <span><small>Source</small><b>{historyDetail.marathon.sourceLabel || historyDetail.marathon.sourceType}</b></span>
+              <span><small>Scheduled start</small><b>{clock(historyDetail.marathon.scheduledStart)}</b></span>
+              <span><small>Projected end</small><b>{clock(historyDetail.marathon.scheduledEnd)}</b></span>
+              <span><small>Actual start</small><b>{clock(historyDetail.marathon.actualStart)}</b></span>
+              <span><small>Actual end</small><b>{clock(historyDetail.marathon.actualEnd)}</b></span>
+              <span><small>Completed</small><b>{historyDetail.marathon.completedEntries}</b></span>
+              <span><small>Failed / skipped</small><b>{historyDetail.marathon.failedEntries}</b></span>
+              <span><small>Unplayed</small><b>{historyDetail.unplayedEntries}</b></span>
+              <span><small>Early end requested</small><b>{clock(historyDetail.marathon.earlyEndRequestedAt)}</b></span>
+            </div>
+            <div className="marathon-entry-list history-entries">
+              {historyDetail.entries.map((entry) => (
+                <div className={`marathon-entry history-entry state-${entry.playbackState}`} key={entry.id}>
+                  <span className="entry-position">{entry.position + 1}</span>
+                  <div className="entry-thumb"><ListVideo size={20} /></div>
+                  <div><b>{entry.title}</b><small>{entry.sourceType === "local" ? "Local file" : "YouTube"} · {duration(entry.duration)}</small></div>
+                  <span className="entry-state">{entry.playbackState}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {message && <div className="marathon-message"><Check size={16} /> {message}</div>}
         {problem && <div className="schedule-errors"><AlertTriangle size={16} /> {problem}</div>}
       </section>
+
+      {confirmEnd && marathon?.status === "active" && (
+        <div className="marathon-modal-backdrop" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget) setConfirmEnd(false); }}>
+          <div className="marathon-modal" role="dialog" aria-modal="true" aria-labelledby="end-marathon-title">
+            <span className="eyebrow">ACTIVE MARATHON</span>
+            <h3 id="end-marathon-title">End Marathon Early?</h3>
+            <p>The current Marathon video will finish playing before IdleCast returns to normal playback. Remaining Marathon videos will not be played.</p>
+            <div>
+              <button type="button" onClick={() => setConfirmEnd(false)} disabled={!!pending}>Keep Marathon</button>
+              <button type="button" className="confirm-end-button" onClick={() => void endMarathon()} disabled={!!pending}>{pending === "end" ? "Ending…" : "End Marathon"}</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

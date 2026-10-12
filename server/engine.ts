@@ -389,7 +389,7 @@ export class Engine extends EventEmitter {
     const completedCommitments = controllingMarathon
       ? this.store.completedQueueEntriesSince(controllingMarathon.scheduleUpdatedAt ?? controllingMarathon.createdAt)
       : new Set<string>();
-    const marathonOwnsStartup = Boolean(controllingMarathon?.status === "active" || (
+    const marathonOwnsStartup = Boolean(["active", "ending"].includes(controllingMarathon?.status ?? "") || (
       controllingMarathon?.status === "scheduled" &&
       controllingMarathon.scheduledStart !== null &&
       Date.now() >= controllingMarathon.scheduledStart &&
@@ -411,6 +411,8 @@ export class Engine extends EventEmitter {
       };
     this.state = "buffering";
     this.event(marathonOwnsStartup ? "Playback requested; restoring Marathon through the existing transition pipeline" : handoffOwnsStartup ? "Playback requested; restoring the prepared normal handoff queue" : "Playback requested; preparing startup buffer");
+    if (controllingMarathon?.status === "ending")
+      this.event("Ending state recovered after restart; the unfinished Marathon entry will finish before normal playback resumes", "info", { marathonId: controllingMarathon.id, entryId: controllingMarathon.currentEntryId });
     this.task = (async () => {
       while (!signal.aborted && this.bufferedIds.size < this.bufferTarget) {
         await this.fillBuffer(
@@ -522,8 +524,25 @@ export class Engine extends EventEmitter {
     this.state = "stopped";
     this.event("Playback stopped");
   }
+  async endMarathon(id: string) {
+    const result = this.store.requestEndMarathon(id);
+    if (result.duplicate) {
+      this.event("Duplicate End Marathon request suppressed", "warn", { marathonId: id });
+      return result.record;
+    }
+    this.ensureNormalHandoffPlan(id, this.store.all());
+    for (const [key, prepared] of [...this.preparedMedia])
+      if (prepared.owner === "marathon" && prepared.file !== this.currentMedia?.file && key !== `marathon:${result.record.marathon.currentEntryId}`)
+        this.preparedMedia.delete(key);
+    if (this.activeSource && this.controller && !this.controller.signal.aborted)
+      this.scheduleOwnedRefill(this.activeSource, this.controller.signal);
+    this.event("End Marathon requested; current video will finish before normal playback resumes", "info", { marathonId: id, entryId: result.record.marathon.currentEntryId });
+    return result.record;
+  }
   skip() {
     if (!this.task) throw new Error("Playback is stopped");
+    if (this.store.controllingMarathon()?.marathon.status === "ending")
+      throw new Error("The current Marathon video must finish before normal playback resumes");
     this.skipRequested = true;
     this.clip?.abort();
   }
@@ -1001,6 +1020,14 @@ export class Engine extends EventEmitter {
         this.ensureNormalHandoffPlan(marathon.id, items);
     }
 
+    if (record?.marathon.status === "ending") {
+      this.ensureNormalHandoffPlan(record.marathon.id, items);
+      const currentKey = record.marathon.currentEntryId ? `marathon:${record.marathon.currentEntryId}` : "";
+      for (const [key, prepared] of [...this.preparedMedia])
+        if (prepared.owner === "marathon" && key !== currentKey && prepared.file !== this.currentMedia?.file)
+          this.preparedMedia.delete(key);
+    }
+
     const plan = this.normalHandoffPlan();
     const handoffItems = plan
       ? plan.entryIds.map((id) => items.find((item) => item.id === id)).filter((item): item is StoredItem => !!item)
@@ -1096,8 +1123,10 @@ export class Engine extends EventEmitter {
       if (Date.now() < marathon.scheduledStart)
         return { item: null, index: 0, marathon: null, blocked: "Normal queue boundary complete; standby is holding output until the scheduled Marathon start", waitMs: Math.max(1000, Math.min(60000, marathon.scheduledStart - Date.now())), blockedLevel: "info" as const };
     }
-    if (!["scheduled", "active"].includes(marathon.status)) return null;
-    const entry = entries.find((candidate) => candidate.position === marathon.currentPosition);
+    if (!["scheduled", "active", "ending"].includes(marathon.status)) return null;
+    const entry = marathon.status === "ending" && marathon.currentEntryId
+      ? entries.find((candidate) => candidate.id === marathon.currentEntryId) ?? entries.find((candidate) => candidate.position === marathon.currentPosition)
+      : entries.find((candidate) => candidate.position === marathon.currentPosition);
     if (!entry)
       return { item: null, index: 0, marathon: null, blocked: "Marathon snapshot is incomplete at the current position", waitMs: 60000, blockedLevel: "error" as const };
     if (!Number.isFinite(entry.duration) || Number(entry.duration) <= 0)
@@ -1420,9 +1449,17 @@ export class Engine extends EventEmitter {
               if (Number.isFinite(n) && n > lastFrame) {
                 if (lastFrame < 0) {
                   if (!marathon && this.marathonHandoffPending) {
+                    const handoffPlan = this.normalHandoffPlan();
+                    const handedOffMarathon = handoffPlan ? this.store.marathon(handoffPlan.marathonId)?.marathon : null;
                     this.marathonHandoffPending = false;
                     this.marathonHandoffReported = false;
-                    this.event("Normal playback resumed after Marathon completion");
+                    this.event(
+                      handedOffMarathon?.status === "ended_early"
+                        ? "Early-ending handoff completed: normal playback resumed"
+                        : "Normal playback resumed after Marathon completion",
+                      "info",
+                      handedOffMarathon ? { marathonId: handedOffMarathon.id } : {},
+                    );
                   }
                   if (marathon && !marathonActivated) {
                     try {
@@ -1548,7 +1585,11 @@ export class Engine extends EventEmitter {
           else if (completed.finished) {
             this.marathonHandoffPending = true;
             this.marathonHandoffReported = false;
-            this.event(`Marathon completed: ${marathon.name}`, "info", { marathonId: marathon.id });
+            this.event(
+              completed.endedEarly ? `Marathon ended early after the current video finished: ${marathon.name}` : `Marathon completed: ${marathon.name}`,
+              "info",
+              { marathonId: marathon.id },
+            );
           }
           else
             this.event(`Marathon entry completed: ${item.title}`, "info", { marathonId: marathon.id, entryId: marathon.entry.id });
@@ -1604,9 +1645,12 @@ export class Engine extends EventEmitter {
           } catch (error) {
             this.event(`Marathon progress persistence failed while preserving the interrupted entry — ${error instanceof Error ? error.message : "unknown database error"}`, "error", { marathonId: marathon.id, entryId: marathon.entry.id });
           }
-          const marathonFailure = /local media file missing|external drive disconnected|source mode .* does not match/i.test(message)
-            ? "Marathon entry unavailable"
-            : marathonActivated ? "Marathon playback interrupted" : "Marathon entry preparation failed";
+          const ending = this.store.marathon(marathon.id)?.marathon.status === "ending";
+          const marathonFailure = ending
+            ? "Current Marathon entry unavailable during Ending"
+            : /local media file missing|external drive disconnected|source mode .* does not match/i.test(message)
+              ? "Marathon entry unavailable"
+              : marathonActivated ? "Marathon playback interrupted" : "Marathon entry preparation failed";
           this.event(`${marathonFailure}; position preserved: ${item.title} — ${message}`, "error", { marathonId: marathon.id, entryId: marathon.entry.id });
           await delay(60000, signal).catch(() => {});
         } else if (handoff) {

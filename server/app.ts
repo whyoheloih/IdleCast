@@ -466,6 +466,42 @@ export function createApp(c: Config, store: Store, engine: Engine) {
       res.json(marathon);
     } catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : "Schedule cancellation failed" }); }
   });
+  app.get("/api/marathon-history", (req, res) => {
+    try {
+      const requested = Number(req.query.limit ?? 100);
+      res.json(store.marathonHistory(Number.isFinite(requested) ? Math.max(1, Math.min(200, requested)) : 100));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not read Marathon History";
+      engine.event(`Marathon History persistence failure while listing records — ${message}`, "error");
+      res.status(500).json({ error: "Could not read Marathon History" });
+    }
+  });
+  app.get("/api/marathon-history/:id", (req, res) => {
+    try {
+      const record = store.marathon(req.params.id);
+      if (!record || !["completed", "ended_early", "failed", "cancelled"].includes(record.marathon.status))
+        return res.status(404).json({ error: "Marathon history record not found" });
+      res.json({
+        ...record,
+        unplayedEntries: Math.max(0, record.marathon.totalEntries - record.marathon.completedEntries - record.marathon.failedEntries),
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not read Marathon History";
+      engine.event(`Marathon History persistence failure while reading details — ${message}`, "error", { marathonId: req.params.id });
+      res.status(500).json({ error: "Could not read Marathon History" });
+    }
+  });
+  app.post("/api/marathons/:id/end", async (req, res) => {
+    try {
+      const record = await engine.endMarathon(req.params.id);
+      res.json(record);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not end Marathon";
+      if (/sqlite|database/i.test(message))
+        engine.event(`Marathon History persistence failure while requesting End Marathon — ${message}`, "error", { marathonId: req.params.id });
+      res.status(/not found/i.test(message) ? 404 : 409).json({ error: message });
+    }
+  });
   app.get("/api/marathons", (_req, res) => res.json(store.marathons()));
   app.get("/api/marathons/:id", (req, res) => {
     const marathon = store.marathon(req.params.id);
@@ -482,7 +518,12 @@ export function createApp(c: Config, store: Store, engine: Engine) {
       ? createHash("sha256").update(path.resolve(settings.localDirectory).toLocaleLowerCase()).digest("hex").slice(0, 32)
       : createHash("sha256").update(JSON.stringify(settings.sources.length ? settings.sources : [{ kind: settings.sourceMode, value: settings.sourceMode === "channel" ? settings.channelUrl : settings.playlistId }])).digest("hex").slice(0, 32);
     const boundary = store.get<{ id: string } | null>("cursor", null)?.id ?? null;
-    res.status(201).json(store.createMarathon(parsed.data.name, settings.mediaSource === "local" ? "local" : "youtube", sourceIdentity, items, boundary));
+    const sourceLabel = settings.mediaSource === "local"
+      ? settings.localDirectory || "Local media collection"
+      : settings.sources.map((source) => source.value).filter(Boolean).join(" + ") ||
+        (settings.sourceMode === "channel" ? settings.channelUrl : settings.playlistId) ||
+        "YouTube collection";
+    res.status(201).json(store.createMarathon(parsed.data.name, settings.mediaSource === "local" ? "local" : "youtube", sourceIdentity, items, boundary, sourceLabel));
   });
   app.post("/api/sync", async (_req, res) => {
     await engine.sync();
