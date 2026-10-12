@@ -68,6 +68,20 @@ export type EngineDependencies = {
   source?: MediaSourceProvider;
   outputs?: Partial<Record<"youtube" | "twitch", StreamOutputProvider>>;
 };
+type PreparationOwner = "normal" | "marathon" | "normal-handoff";
+type PreparedMedia = {
+  file: string;
+  info: any;
+  size: number;
+  owner?: PreparationOwner;
+  logicalId?: string;
+  videoId?: string;
+};
+type NormalHandoffPlan = {
+  marathonId: string;
+  entryIds: string[];
+  createdAt: number;
+};
 export class Engine extends EventEmitter {
   state = "stopped";
   current: StoredItem | null = null;
@@ -88,10 +102,11 @@ export class Engine extends EventEmitter {
   private currentMedia: { file: string; duration: number } | null = null;
   private download: DownloadActivity | null = null;
   private bufferedIds = new Set<string>();
-  private preparedMedia = new Map<string, { file: string; info: any; size: number }>();
+  private preparedMedia = new Map<string, PreparedMedia>();
   private downloadStates = new Map<string, DownloadActivity>();
   private cachedSizes = new Map<string, number>();
   private refillTask: Promise<void> | null = null;
+  private ownedRefillPending = false;
   private readonly bufferLimit = 5;
   private readonly startupBufferTarget = 3;
   private bufferedCount = 0;
@@ -380,8 +395,9 @@ export class Engine extends EventEmitter {
       Date.now() >= controllingMarathon.scheduledStart &&
       controllingMarathon.committedQueue.every((entry) => completedCommitments.has(entry.entryId))
     ));
+    const handoffOwnsStartup = !!this.normalHandoffPlan();
     const initial = this.bufferCandidates(this.store.all());
-    this.bufferTarget = marathonOwnsStartup ? 0 : Math.min(this.startupBufferTarget, initial.length);
+    this.bufferTarget = marathonOwnsStartup || handoffOwnsStartup ? 0 : Math.min(this.startupBufferTarget, initial.length);
     for (const item of initial.slice(0, this.bufferTarget))
       if (!this.cachedSizes.has(item.videoId))
         this.downloadStates.set(item.videoId, {
@@ -394,7 +410,7 @@ export class Engine extends EventEmitter {
         retries: 0,
       };
     this.state = "buffering";
-    this.event(marathonOwnsStartup ? "Playback requested; restoring Marathon through the existing transition pipeline" : "Playback requested; preparing startup buffer");
+    this.event(marathonOwnsStartup ? "Playback requested; restoring Marathon through the existing transition pipeline" : handoffOwnsStartup ? "Playback requested; restoring the prepared normal handoff queue" : "Playback requested; preparing startup buffer");
     this.task = (async () => {
       while (!signal.aborted && this.bufferedIds.size < this.bufferTarget) {
         await this.fillBuffer(
@@ -778,7 +794,7 @@ export class Engine extends EventEmitter {
           throw error;
         }
         const size = (await stat(file)).size;
-        this.preparedMedia.set(item.videoId, { file, info, size });
+        this.preparedMedia.set(item.videoId, { file, info, size, owner: "normal", logicalId: item.id, videoId: item.videoId });
         this.cachedSizes.set(item.videoId, size);
         this.downloadStates.set(item.videoId, {
           videoId: item.videoId,
@@ -817,6 +833,13 @@ export class Engine extends EventEmitter {
     source.retain?.([...this.bufferedIds]);
   }
 
+  private finishRefill(source: MediaSourceProvider, signal: AbortSignal) {
+    this.refillTask = null;
+    if (!this.ownedRefillPending || signal.aborted) return;
+    this.ownedRefillPending = false;
+    this.scheduleOwnedRefill(source, signal);
+  }
+
   private scheduleRefill(
     source: MediaSourceProvider,
     items: StoredItem[],
@@ -832,9 +855,192 @@ export class Engine extends EventEmitter {
       startIndex,
     )
       .catch(() => {})
-      .finally(() => {
-        this.refillTask = null;
-      });
+      .finally(() => this.finishRefill(source, signal));
+  }
+
+  private normalHandoffPlan() {
+    const plan = this.store.get<NormalHandoffPlan | null>("marathonNormalHandoff", null);
+    return plan && Array.isArray(plan.entryIds) && plan.entryIds.length ? plan : null;
+  }
+
+  private ensureNormalHandoffPlan(marathonId: string, items: StoredItem[]) {
+    const existing = this.normalHandoffPlan();
+    if (existing?.marathonId === marathonId) return existing;
+    const entryIds = this.bufferCandidates(items).slice(0, this.bufferLimit).map((item) => item.id);
+    const plan: NormalHandoffPlan = { marathonId, entryIds, createdAt: Date.now() };
+    this.store.set("marathonNormalHandoff", plan);
+    if (!entryIds.length)
+      this.event("Normal handoff preload delayed: no eligible normal videos are available", "warn", { marathonId });
+    else
+      this.event(`Normal handoff queue locked for ${entryIds.length} video${entryIds.length === 1 ? "" : "s"}`, "info", { marathonId });
+    return entryIds.length ? plan : null;
+  }
+
+  private normalHandoffChoice(items: StoredItem[]) {
+    const plan = this.normalHandoffPlan();
+    if (!plan) return null;
+    const item = items.find((candidate) => candidate.id === plan.entryIds[0]);
+    return item
+      ? { item, index: items.indexOf(item), blocked: null, waitMs: 0, blockedLevel: "info" as const, handoff: true }
+      : { item: null, index: 0, blocked: "Normal handoff waiting for its intended media entry to become available", waitMs: 60000, blockedLevel: "warn" as const, handoff: true };
+  }
+
+  private advanceNormalHandoff(entryId: string) {
+    const plan = this.normalHandoffPlan();
+    if (!plan || plan.entryIds[0] !== entryId) return false;
+    const entryIds = plan.entryIds.slice(1);
+    this.store.set("marathonNormalHandoff", entryIds.length ? { ...plan, entryIds } : null);
+    return true;
+  }
+
+  private retainedVideoIds(extra: string[] = []) {
+    return [...new Set([
+      ...this.bufferedIds,
+      ...[...this.preparedMedia.values()].map((prepared) => prepared.videoId).filter((id): id is string => !!id),
+      ...extra,
+    ])];
+  }
+
+  private async prepareOwnedMedia(
+    source: MediaSourceProvider,
+    item: StoredItem,
+    key: string,
+    owner: PreparationOwner,
+    signal: AbortSignal,
+    stillWanted: () => boolean,
+  ) {
+    const existing = this.preparedMedia.get(key);
+    if (existing) {
+      try {
+        await stat(existing.file);
+        existing.owner = owner;
+        return existing;
+      } catch {
+        this.preparedMedia.delete(key);
+        this.event(`Prepared media unavailable; re-preparing ${item.title}`, "warn", { entryId: key, videoId: item.videoId });
+      }
+    }
+    const shared = [...this.preparedMedia.values()].find((prepared) => prepared.videoId === item.videoId);
+    if (shared) {
+      try {
+        await stat(shared.file);
+        const prepared = { ...shared, owner, logicalId: key, videoId: item.videoId };
+        const wanted = stillWanted();
+        if (wanted) this.preparedMedia.set(key, prepared);
+        return wanted ? prepared : null;
+      } catch {
+        this.event(`Prepared media unavailable; re-preparing ${item.title}`, "warn", { entryId: key, videoId: item.videoId });
+      }
+    }
+    const file = await source.resolve(item, signal);
+    const info = await this.probeMedia(file, signal);
+    const size = (await stat(file)).size;
+    if (!stillWanted()) {
+      this.event("Stale Marathon refill result ignored", "warn", { entryId: key, videoId: item.videoId });
+      return null;
+    }
+    const prepared: PreparedMedia = { file, info, size, owner, logicalId: key, videoId: item.videoId };
+    this.preparedMedia.set(key, prepared);
+    this.cachedSizes.set(item.videoId, size);
+    if (owner !== "marathon") {
+      this.bufferedIds.add(item.videoId);
+      this.bufferedCount = this.bufferedIds.size;
+    }
+    this.downloadStates.set(item.videoId, {
+      videoId: item.videoId,
+      title: item.title,
+      thumbnail: item.thumbnail,
+      percent: 100,
+      status: "downloaded",
+      attempt: this.downloadStates.get(item.videoId)?.attempt ?? 1,
+      bytes: size,
+    });
+    this.download = null;
+    this.event();
+    return prepared;
+  }
+
+  private async fillOwnedBuffers(source: MediaSourceProvider, signal: AbortSignal) {
+    const items = this.store.all();
+    const record = this.store.controllingMarathon();
+    let marathonVideoIds: string[] = [];
+    if (record?.marathon.status === "active") {
+      const { marathon, entries } = record;
+      const stalePlan = this.normalHandoffPlan();
+      if (stalePlan && stalePlan.marathonId !== marathon.id)
+        this.store.set("marathonNormalHandoff", null);
+      const window = entries
+        .filter((entry) => entry.position >= marathon.currentPosition)
+        .slice(0, 2);
+      const wantedKeys = new Set(window.map((entry) => `marathon:${entry.id}`));
+      marathonVideoIds = window.map((entry) => this.marathonItem(entry).videoId);
+      for (const [key, prepared] of [...this.preparedMedia])
+        if (prepared.owner === "marathon" && !wantedKeys.has(key) && prepared.file !== this.currentMedia?.file)
+          this.preparedMedia.delete(key);
+      source.retain?.(this.retainedVideoIds(marathonVideoIds));
+      for (const entry of window) {
+        signal.throwIfAborted();
+        const key = `marathon:${entry.id}`;
+        if (this.preparedMedia.has(key)) continue;
+        const item = this.marathonItem(entry);
+        try {
+          await this.prepareOwnedMedia(source, item, key, "marathon", signal, () => {
+            const current = this.store.controllingMarathon();
+            return current?.marathon.id === marathon.id &&
+              current.marathon.status === "active" &&
+              entry.position >= current.marathon.currentPosition &&
+              entry.position < current.marathon.currentPosition + 2;
+          });
+        } catch (error) {
+          if (signal.aborted) throw error;
+          this.event(`Marathon buffer stalled while preparing ${entry.title} — ${error instanceof Error ? error.message : "unknown error"}`, "warn", { marathonId: marathon.id, entryId: entry.id });
+          break;
+        }
+      }
+      if (marathon.totalEntries - marathon.currentPosition <= 2)
+        this.ensureNormalHandoffPlan(marathon.id, items);
+    }
+
+    const plan = this.normalHandoffPlan();
+    const handoffItems = plan
+      ? plan.entryIds.map((id) => items.find((item) => item.id === id)).filter((item): item is StoredItem => !!item)
+      : [];
+    source.retain?.(this.retainedVideoIds([...marathonVideoIds, ...handoffItems.map((item) => item.videoId)]));
+    for (const item of handoffItems) {
+      signal.throwIfAborted();
+      if (this.preparedMedia.has(item.videoId)) {
+        const prepared = this.preparedMedia.get(item.videoId)!;
+        prepared.owner = "normal-handoff";
+        prepared.logicalId = item.id;
+        prepared.videoId = item.videoId;
+        continue;
+      }
+      try {
+        await this.prepareOwnedMedia(source, item, item.videoId, "normal-handoff", signal, () => {
+          const current = this.normalHandoffPlan();
+          return !!current && current.marathonId === plan!.marathonId && current.entryIds.includes(item.id);
+        });
+      } catch (error) {
+        if (signal.aborted) throw error;
+        this.event(`Normal handoff preload delayed: ${item.title} — ${error instanceof Error ? error.message : "unknown error"}`, "warn", { marathonId: plan!.marathonId, entryId: item.id });
+        break;
+      }
+    }
+    source.retain?.(this.retainedVideoIds([...marathonVideoIds, ...handoffItems.map((item) => item.videoId)]));
+    if (plan && record?.marathon.status !== "active") {
+      const startIndex = Math.max(0, items.findIndex((item) => item.id === plan.entryIds[0]));
+      await this.fillBuffer(source, items, signal, this.bufferLimit, startIndex);
+    }
+  }
+
+  private scheduleOwnedRefill(source: MediaSourceProvider, signal: AbortSignal) {
+    if (this.refillTask) {
+      this.ownedRefillPending = true;
+      return;
+    }
+    this.refillTask = this.fillOwnedBuffers(source, signal)
+      .catch(() => {})
+      .finally(() => this.finishRefill(source, signal));
   }
 
   private marathonItem(entry: MarathonEntry): StoredItem {
@@ -918,20 +1124,23 @@ export class Engine extends EventEmitter {
         null,
       );
       const intended = this.marathonChoice(items);
+      const handoffChoice = intended ? null : this.normalHandoffChoice(items);
+      const selection = intended ?? handoffChoice;
       const marathon = intended?.marathon ?? null;
-      let index = intended?.index ?? Math.max(
+      const handoff = !!handoffChoice?.handoff;
+      let index = selection?.index ?? Math.max(
         0,
         items.findIndex((i) => i.id === saved?.id),
       );
-      let item: StoredItem | undefined = intended?.item ?? undefined;
-      if (intended?.blocked) {
+      let item: StoredItem | undefined = selection?.item ?? undefined;
+      if (selection?.blocked) {
         this.state = "waiting";
         this.current = null;
-        this.event(intended.blocked, intended.blockedLevel);
+        this.event(selection.blocked, selection.blockedLevel);
         const idle = standby(this.config, s, epoch, signal, () =>
-          this.event("Marathon standby encoder failed; retry scheduled", "error"),
+          this.event(handoff ? "Normal handoff standby encoder failed; retry scheduled" : "Marathon standby encoder failed; retry scheduled", "error"),
         );
-        try { await delay(intended.waitMs, signal); } finally { await idle.stop(); }
+        try { await delay(selection.waitMs, signal); } finally { await idle.stop(); }
         continue;
       }
       const shortStartsRemaining = !marathon && s.shuffle
@@ -1054,9 +1263,19 @@ export class Engine extends EventEmitter {
           }
           this.event(`Marathon entry ${marathon.entry.position + 1} preparing: ${item.title}`);
         }
-        source.retain?.([...this.bufferedIds, ...(marathon ? [item.videoId] : [])]);
+        source.retain?.(this.retainedVideoIds([item.videoId]));
         this.event("Preparing media: " + item.title + (item.sourceType === "local" ? ". Validating the original local file before playback." : ". The complete video is downloaded before playback."));
-        const prepared = this.preparedMedia.get(marathon ? item.id : item.videoId);
+        const preparedKey = marathon ? item.id : item.videoId;
+        let prepared = this.preparedMedia.get(preparedKey);
+        if (prepared) {
+          try {
+            await stat(prepared.file);
+          } catch {
+            this.preparedMedia.delete(preparedKey);
+            prepared = undefined;
+            this.event(`Prepared media unavailable; re-preparing ${item.title}`, "warn", { entryId: preparedKey, videoId: item.videoId });
+          }
+        }
         if (!prepared) {
           this.event(`Transition ${transition}: source is not preloaded; standby fallback started`, "warn");
           idle = standby(this.config, s, epoch, clipSignal, (reason) =>
@@ -1071,6 +1290,23 @@ export class Engine extends EventEmitter {
         }
         const file = prepared?.file ?? (await source.resolve(item, clipSignal));
         const info = prepared?.info ?? (await this.probeMedia(file, clipSignal));
+        if (!prepared && (marathon || handoff)) {
+          const size = (await stat(file)).size;
+          const key = marathon ? item.id : item.videoId;
+          this.preparedMedia.set(key, {
+            file,
+            info,
+            size,
+            owner: marathon ? "marathon" : "normal-handoff",
+            logicalId: item.id,
+            videoId: item.videoId,
+          });
+          this.cachedSizes.set(item.videoId, size);
+          if (handoff) {
+            this.bufferedIds.add(item.videoId);
+            this.bufferedCount = this.bufferedIds.size;
+          }
+        }
         sourceReady = true;
         const preparationMs = Date.now() - transitionStartedAt;
 
@@ -1158,7 +1394,8 @@ export class Engine extends EventEmitter {
           this.store.set("lastVideoDuration", item.duration);
           this.store.set("lastVideoSeries", item.seriesKey ?? "");
           this.store.set("cursor", { id: item.id, offset });
-          this.scheduleRefill(source, items, signal, index);
+          if (handoff) this.scheduleOwnedRefill(source, signal);
+          else this.scheduleRefill(source, items, signal, index);
         }
         this.event();
         let lastProgress = Date.now(),
@@ -1195,6 +1432,7 @@ export class Engine extends EventEmitter {
                       return;
                     }
                     this.event(`Marathon started/resumed at entry ${marathon.entry.position + 1}: ${item!.title}`, "info", { marathonId: marathon.id, entryId: marathon.entry.id });
+                    this.scheduleOwnedRefill(source, signal);
                   }
                   const activatedAt = Date.now();
                   this.store.set("health.lastTransitionSuccess", { time: activatedAt, videoId: item!.videoId, title: item!.title, preparationMs });
@@ -1357,6 +1595,12 @@ export class Engine extends EventEmitter {
             : marathonActivated ? "Marathon playback interrupted" : "Marathon entry preparation failed";
           this.event(`${marathonFailure}; position preserved: ${item.title} — ${message}`, "error", { marathonId: marathon.id, entryId: marathon.entry.id });
           await delay(60000, signal).catch(() => {});
+        } else if (handoff) {
+          finishHistory("failed");
+          consumed = false;
+          this.recordFailure(item, message);
+          this.event(`Normal handoff waiting for media: ${item.title} — ${message}`, "warn", { entryId: item.id });
+          await delay(60000, signal).catch(() => {});
         } else {
           if (this.marathonHandoffPending && !this.marathonHandoffReported) {
             this.marathonHandoffReported = true;
@@ -1388,6 +1632,7 @@ export class Engine extends EventEmitter {
       }
       this.state = "selecting";
       if (consumed && !marathon) {
+        if (handoff) this.advanceNormalHandoff(item.id);
         this.bufferedIds.delete(item.videoId);
         this.preparedMedia.delete(item.videoId);
         this.downloadStates.delete(item.videoId);
@@ -1400,6 +1645,7 @@ export class Engine extends EventEmitter {
         const next = fresh[(at + 1) % Math.max(1, fresh.length)];
         this.store.set("cursor", next ? { id: next.id, offset: 0 } : null);
       } else if (consumed && marathon) {
+        this.preparedMedia.delete(item.id);
         this.event();
       }
     }
@@ -1440,7 +1686,7 @@ export class Engine extends EventEmitter {
 
   queueChanged() {
     const marathon = this.store.controllingMarathon()?.marathon;
-    if (marathon?.status === "active" || this.current?.id.startsWith("marathon:")) {
+    if (marathon?.status === "active" || this.current?.id.startsWith("marathon:") || this.normalHandoffPlan()) {
       this.event("Normal queue update saved; buffer changes are deferred until Marathon playback ends");
       return;
     }
