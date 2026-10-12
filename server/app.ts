@@ -354,9 +354,30 @@ export function createApp(c: Config, store: Store, engine: Engine) {
       return;
     }
     const moving = preview[from];
+    const controlling = store.controllingMarathon();
+    const lockedByMarathon = controlling?.entries.some((entry) =>
+      entry.sourceType === "local"
+        ? !!moving.localIdentity && entry.localIdentity === moving.localIdentity
+        : !!entry.youtubeVideoId && entry.youtubeVideoId === moving.videoId,
+    );
+    if (lockedByMarathon) {
+      res.status(409).json({
+        error: "This video belongs to the scheduled or active Marathon snapshot and cannot be reordered until the Marathon is cancelled or completed.",
+      });
+      return;
+    }
     const block = moving.seriesKey
       ? preview.filter((item) => item.seriesKey === moving.seriesKey)
       : [moving];
+    const lockedSeriesMember = block.find((item) => controlling?.entries.some((entry) =>
+      entry.sourceType === "local"
+        ? !!item.localIdentity && entry.localIdentity === item.localIdentity
+        : !!entry.youtubeVideoId && entry.youtubeVideoId === item.videoId,
+    ));
+    if (lockedSeriesMember && lockedSeriesMember.id !== moving.id) {
+      res.status(409).json({ error: "This series contains a scheduled or active Marathon video and cannot be reordered until the Marathon is cancelled or completed." });
+      return;
+    }
     const blockIds = new Set(block.map((item) => item.id));
     const remaining = preview.filter((item) => !blockIds.has(item.id));
     const target = Math.max(0, Math.min(parsed.data.to, remaining.length));

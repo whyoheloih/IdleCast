@@ -1713,3 +1713,95 @@ html[data-theme="light"] .health-code { background: #fff5eb; border-color: #d7b3
   .health-overall { align-items: flex-start; }
   .health-overall small { margin: 3px 0 0 auto; }
 }
+.filters-page { display: grid; gap: 22px; }
+.filters-main-card { padding: 28px; }
+.filters-main-card > .filter-panel { margin: 20px 0 0; }
+.marathon-shell { padding: 30px; overflow: hidden; background: #17151e; border-color: #3a3150; }
+.marathon-heading, .source-readiness, .current-marathon-card, .marathon-preview-heading { display: flex; align-items: center; justify-content: space-between; gap: 20px; }
+.marathon-heading h2 { margin: 8px 0 5px; font-size: 25px; }
+.marathon-heading p, .marathon-source p, .snapshot-builder p { color: #9a92aa; font-size: 11px; }
+.marathon-status, .entry-state { padding: 6px 10px; border: 1px solid #6c559c; border-radius: 999px; color: #cdb9ff; font-size: 9px; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.status-active { color: #ffd772; border-color: #9d7830; background: #5b42182e; }
+.marathon-source, .snapshot-builder { margin-top: 24px; padding: 22px; border: 1px solid #3a3150; border-radius: 13px; background: #14121a; }
+.marathon-source h3, .snapshot-builder h3, .current-marathon-card h3, .marathon-preview h3 { margin: 0 0 7px; font-size: 17px; }
+.source-mode-grid, .schedule-methods { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 18px; }
+.source-mode-grid button, .schedule-methods button { text-align: left; padding: 18px; border-radius: 11px; border: 1px solid #3b3548; background: #1b1822; color: #ddd6e8; }
+.source-mode-grid button { display: grid; grid-template-columns: auto 1fr; gap: 4px 11px; align-items: center; }
+.source-mode-grid button small { grid-column: 2; }
+.source-mode-grid button.selected, .schedule-methods button.selected { border-color: #8b64dd; background: #2a203c; box-shadow: inset 0 0 0 1px #8b64dd55; }
+.source-mode-grid button.selected svg, .schedule-methods button.selected svg { color: #ba96ff; }
+.source-readiness { margin-top: 16px; padding-top: 16px; border-top: 1px solid #322b40; }
+.source-readiness span { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.source-readiness span:first-child { flex: 1; }
+.source-readiness small { overflow: hidden; color: #8f879d; text-overflow: ellipsis; white-space: nowrap; }
+.current-marathon-card { margin-top: 20px; padding: 22px; border: 1px solid #8b6d2e; border-radius: 13px; background: linear-gradient(120deg, #2b2316, #191621); }
+.current-marathon-card p { color: #bcaa80; font-size: 11px; }
+.marathon-live-stats { display: flex; gap: 25px; }
+.marathon-live-stats span { display: grid; gap: 4px; text-align: center; }
+.marathon-live-stats b { color: #ffd772; font-size: 16px; }
+.marathon-live-stats small { color: #988b70; font-size: 9px; text-transform: uppercase; }
+.marathon-summary-grid { display: grid; grid-template-columns: 1.4fr repeat(3, 1fr); gap: 12px; margin: 20px 0; }
+.marathon-summary-grid article { min-width: 0; padding: 17px; border: 1px solid #393245; border-radius: 10px; background: #191720; }
+.marathon-summary-grid small, .marathon-summary-grid span { display: block; color: #8e869a; font-size: 9px; }
+.marathon-summary-grid b { display: block; overflow: hidden; margin: 7px 0; color: #eeeaf4; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
+.good { color: #83d1a0 !important; } .bad { color: #ef8e94 !important; }
+.schedule-methods button { display: flex; align-items: flex-start; gap: 13px; }
+.schedule-methods button svg { flex-shrink: 0; }
+.schedule-methods span { display: grid; gap: 7px; }
+.schedule-methods small { color: #968da3; line-height: 1.45; }
+.marathon-datetime { display: grid; grid-template-columns: 1fr 1.15fr; gap: 18px; align-items: end; margin-top: 18px; padding: 20px; border-radius: 11px; background: #131118; }
+.marathon-datetime label { margin: 0; }
+.marathon-datetime fieldset { border: 0; margin: 0; padding: 0; display: grid; grid-template-columns: 1fr auto 1fr 1fr; gap: 8px; align-items: center; }
+.marathon-datetime legend { margin-bottom: 9px; color: #b7bec8; font-size: 12px; }
+.marathon-datetime select { margin: 0; }
+.timezone-label { grid-column: 1/-1; display: flex; gap: 7px; align-items: center; color: #8f879d; font-size: 10px; }
+.schedule-result { margin-top: 18px; padding: 22px; border: 1px solid #594577; border-radius: 12px; background: linear-gradient(100deg, #251c34, #191520); }
+.schedule-result > div { display: flex; align-items: center; gap: 24px; margin-top: 14px; }
+.schedule-result p { display: grid; gap: 6px; margin: 0; }
+.schedule-result small { color: #9d93aa; font-size: 9px; text-transform: uppercase; }
+.schedule-result b { font-size: 14px; }
+.schedule-result i { width: 26px; height: 1px; background: #65517f; }
+.availability-card { display: grid; grid-template-columns: 1.2fr 1fr; gap: 22px; margin-top: 18px; padding: 22px; border: 1px solid #44384f; border-radius: 12px; background: #17141c; }
+.availability-card h3 { margin: 8px 0; }
+.availability-card strong { color: #ff7f88; font-size: 20px; }
+.availability-card p { color: #918899; font-size: 10px; line-height: 1.6; }
+.availability-detail { display: grid; gap: 9px; }
+.availability-detail span { display: flex; justify-content: space-between; gap: 12px; padding-bottom: 8px; border-bottom: 1px solid #332b3a; }
+.availability-detail small { color: #8f8799; }
+.schedule-errors, .marathon-message { grid-column: 1/-1; display: flex; gap: 9px; align-items: center; padding: 12px; border-radius: 7px; font-size: 11px; }
+.schedule-errors { color: #ef9b9f; background: #3b2228; border: 1px solid #65363d; }
+.marathon-message { margin-top: 16px; color: #a7e0b8; background: #193226; border: 1px solid #315943; }
+.schedule-marathon { width: 100%; justify-content: center; margin-top: 18px; padding: 15px; border-color: #9669e8; background: linear-gradient(90deg, #6f43bd, #8958d4); color: white; font-size: 13px; font-weight: 800; }
+.marathon-preview { margin-top: 24px; border: 1px solid #393245; border-radius: 12px; overflow: hidden; }
+.marathon-preview-heading { padding: 20px; background: #18151f; }
+.marathon-preview-heading h3 { margin-top: 7px; }
+.marathon-preview-heading > span { color: #9a91a5; font-size: 10px; }
+.marathon-entry-list { max-height: 520px; overflow: auto; }
+.marathon-entry { display: grid; grid-template-columns: 30px 72px minmax(0,1fr) auto; gap: 13px; align-items: center; min-height: 68px; padding: 10px 16px; border-top: 1px solid #302a39; }
+.marathon-entry.completed { background: #1a2a2026; }
+.entry-position { color: #8f849d; font-size: 10px; }
+.entry-thumb { width: 72px; height: 42px; display: grid; place-items: center; overflow: hidden; border-radius: 6px; background: #282231; color: #8f80a2; }
+.entry-thumb img { width: 100%; height: 100%; object-fit: cover; }
+.marathon-entry b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
+.marathon-entry small { display: block; margin-top: 5px; color: #8f8798; font-size: 9px; }
+.snapshot-builder > label { max-width: 520px; }
+.marathon-row { background: linear-gradient(90deg, rgba(214,164,54,.13), transparent 58%); box-shadow: inset 3px 0 #d6a436; }
+.marathon-row-badge { flex-shrink: 0; color: #ffd66b; font-size: 9px; font-weight: 900; letter-spacing: .08em; }
+.marathon-row .drag-handle { opacity: .25; cursor: not-allowed; }
+html[data-theme="light"] .marathon-shell { background: #ede7f5; border-color: #bcaad4; }
+html[data-theme="light"] .marathon-source, html[data-theme="light"] .snapshot-builder, html[data-theme="light"] .marathon-summary-grid article, html[data-theme="light"] .marathon-datetime, html[data-theme="light"] .availability-card, html[data-theme="light"] .marathon-preview-heading { background: #f4f0f8; border-color: #c8bad8; }
+html[data-theme="light"] .source-mode-grid button, html[data-theme="light"] .schedule-methods button { background: #e5dcef; border-color: #baa9ce; color: #30273b; }
+@media (max-width: 900px) {
+  .marathon-summary-grid { grid-template-columns: 1fr 1fr; }
+  .current-marathon-card, .source-readiness { align-items: stretch; flex-direction: column; }
+  .marathon-live-stats { justify-content: space-around; }
+}
+@media (max-width: 680px) {
+  .marathon-shell, .filters-main-card { padding: 18px; }
+  .source-mode-grid, .schedule-methods, .marathon-summary-grid, .marathon-datetime, .availability-card { grid-template-columns: 1fr; }
+  .schedule-result > div { align-items: flex-start; flex-direction: column; }
+  .schedule-result i { display: none; }
+  .marathon-entry { grid-template-columns: 24px 58px minmax(0,1fr); }
+  .entry-thumb { width: 58px; height: 36px; }
+  .entry-state, .marathon-row-badge { display: none; }
+}

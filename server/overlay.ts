@@ -75,12 +75,19 @@ export function formatUploadDate(value: string) {
 }
 
 // Preview requests use their own directory so drafts never change broadcast text files.
+export type MarathonOverlay = {
+  name: string;
+  completed: number;
+  total: number;
+};
+
 export async function overlay(
   c: Config,
   s: Settings,
   directory = path.join(c.DATA_DIR, "overlay"),
   publishedAt = "",
   timeline?: { offset: number; total: number },
+  marathon?: MarathonOverlay,
 ): Promise<{ inputs: string[]; filter: string }> {
   const base = `[0:v:0]scale=${s.width}:${s.height}:force_original_aspect_ratio=decrease,pad=${s.width}:${s.height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${s.fps},format=yuv420p[base]`;
   if (!s.overlay.enabled)
@@ -91,6 +98,12 @@ export async function overlay(
   await writeFile(textFile, layout.title);
   const dateFile = path.join(directory, "date.txt");
   await writeFile(dateFile, layout.date);
+  const marathonFile = path.join(directory, "marathon.txt");
+  const progressFile = path.join(directory, "marathon-progress.txt");
+  if (marathon) {
+    await writeFile(marathonFile, `MARATHON: ${marathon.name.replace(/[\r\n\x00-\x1f]/g, " ")}`);
+    await writeFile(progressFile, `${marathon.completed} / ${marathon.total} Complete`);
+  }
   const avatar = s.overlay.avatar
     ? await containedFile(path.join(c.MEDIA_DIR, "avatars"), s.overlay.avatar)
     : "";
@@ -109,9 +122,20 @@ export async function overlay(
   const countdown = timeline
     ? `,drawtext=${countdownStyle}:text='Next video in %{eif\\:max(0\\,ceil(${timeline.total - timeline.offset}-t))\\:d}':fontsize=${Math.max(40, Math.round(s.height / 16))}:x=(w-tw)/2:y=${Math.max(28, Math.round(s.height * .06))}:enable='between(t\\,${countdownStart}\\,${countdownEnd})':alpha='if(lt(t\\,${countdownStart + .6})\\,(t-${countdownStart})/.6\\,1)'`
     : "";
+  const timelineSize = Math.max(layout.dateSize + 5, 18);
+  const marathonSize = Math.max(layout.dateSize + 2, 16);
+  const goldStyle = style.replace("bordercolor=black", "bordercolor=0xD9A441");
+  const marathonDraw = marathon
+    ? `,drawtext=${goldStyle}:textfile='${filterPath(marathonFile)}':reload=1:fontsize=${marathonSize}:x=${s.overlay.margin}:y=max(${s.overlay.margin}\\,${Math.round(layout.y - marathonSize - 10)})`
+    : "";
+  const progressRightOffset = timelineText ? Math.round(timelineSize * 8.5) + 34 : 0;
+  const progressDraw = marathon
+    ? `,drawtext=${goldStyle}:textfile='${filterPath(progressFile)}':reload=1:fontsize=${marathonSize}:x=w-tw-${s.overlay.margin + progressRightOffset}:y=h-th-${s.overlay.margin}`
+    : "";
   const draw = `drawtext=${style}:textfile='${filterPath(textFile)}':reload=1:fontsize=${layout.fontSize}:line_spacing=${Math.ceil(layout.fontSize * .25)}:x=${layout.textX}:y=${layout.textY}` +
     (layout.date ? `,drawtext=${style}:textfile='${filterPath(dateFile)}':reload=1:fontsize=${layout.dateSize}:x=${layout.textX}:y=${layout.textY + layout.dateOffset}` : "") +
-    (timelineText ? `,drawtext=${style.replace("expansion=none", "expansion=normal")}:text='${timelineText}':fontsize=${Math.max(layout.dateSize + 5, 18)}:x=w-tw-${s.overlay.margin}:y=h-th-${s.overlay.margin}` : "") + countdown;
+    (timelineText ? `,drawtext=${style.replace("expansion=none", "expansion=normal")}:text='${timelineText}':fontsize=${timelineSize}:x=w-tw-${s.overlay.margin}:y=h-th-${s.overlay.margin}` : "") +
+    marathonDraw + progressDraw + countdown;
   const box = `[base]null[box]`;
   if (!avatar)
     return {

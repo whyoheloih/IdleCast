@@ -1334,6 +1334,13 @@ export class Engine extends EventEmitter {
           undefined,
           publishedAt,
           { offset, total: duration },
+          marathon
+            ? {
+                name: marathon.name,
+                completed: this.store.marathon(marathon.id)?.marathon.completedEntries ?? 0,
+                total: this.store.marathon(marathon.id)?.marathon.totalEntries ?? 0,
+              }
+            : undefined,
         );
         clipSignal.throwIfAborted();
         if (idle) {
@@ -1474,6 +1481,13 @@ export class Engine extends EventEmitter {
                         undefined,
                         activePublishedAt,
                         { offset: this.elapsed, total: duration },
+                        marathon
+                          ? {
+                              name: marathon.name,
+                              completed: this.store.marathon(marathon.id)?.marathon.completedEntries ?? 0,
+                              total: this.store.marathon(marathon.id)?.marathon.totalEntries ?? 0,
+                            }
+                          : undefined,
                       ).then(() =>
                         this.event("Restored stale title/date overlay", "warn"),
                       );

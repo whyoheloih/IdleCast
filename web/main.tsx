@@ -40,6 +40,7 @@ import { OverlayEditor } from "./OverlayEditor";
 import { Credentials } from "./Credentials";
 import { YouTubeViewer } from "./YouTubeViewer";
 import { HealthPage } from "./HealthPage";
+import { MarathonPage, isMarathonItem, type MarathonRecord } from "./MarathonPage";
 import { updateCommand, updateHistory } from "../server/updates";
 import "./style.css";
 type Snapshot = {
@@ -116,6 +117,7 @@ const hasQueueSource = (settings: Settings | null) =>
 const nav = [
   ["Overview", LayoutDashboard],
   ["Playlist", ListVideo],
+  ["Filters", SlidersHorizontal],
   ["Downloaded Videos", Download],
   ["Settings", Settings2],
   ["History", HistoryIcon],
@@ -133,6 +135,7 @@ function App() {
     [items, setItems] = useState<StoredItem[]>([]),
     [logs, setLogs] = useState<any[]>([]),
     [history, setHistory] = useState<PlaybackHistoryItem[]>([]),
+    [marathonData, setMarathonData] = useState<MarathonRecord | null>(null),
     [theme, setTheme] = useState<"dark" | "light">(() =>
       localStorage.getItem("idlecast-theme") === "light" ? "light" : "dark",
     ),
@@ -163,6 +166,10 @@ function App() {
     setSettings(v.settings);
     setConfigured(v.configured);
     setDirty(false);
+  }
+  async function loadMarathonData() {
+    const current = await api("marathon-schedule");
+    setMarathonData(current);
   }
   async function loadItems() {
     const version = ++syncVersion.current;
@@ -219,6 +226,14 @@ function App() {
   useEffect(() => {
     if (auth) void loadItems();
   }, [state?.lastSync]);
+  useEffect(() => {
+    if (!auth) return;
+    void loadMarathonData().catch((e) => setError(e.message));
+    const timer = setInterval(() => {
+      void loadMarathonData().catch(() => {});
+    }, 10000);
+    return () => clearInterval(timer);
+  }, [auth]);
   useEffect(() => {
     if (!auth) return;
     const update = () => {
@@ -284,6 +299,16 @@ function App() {
           ? "Queue order saved."
           : "Queue order saved. IdleCast is updating the five-video download buffer.",
       );
+    });
+  }
+  async function saveMediaSource() {
+    if (!settings) return;
+    await action("source", async () => {
+      await api("settings", "PUT", settings);
+      await loadSettings();
+      await api("sync", "POST");
+      await loadItems();
+      setNotice(settings.mediaSource === "local" ? "Local folder rescanned." : "YouTube source synced.");
     });
   }
   async function saveFilters() {
@@ -410,7 +435,9 @@ function App() {
               {page === "Overview"
                 ? "One playlist. A station that keeps going."
                 : page === "Playlist"
-                  ? "Your YouTube order, automatically kept in sync."
+                  ? "Your playback order, automatically kept in sync."
+                  : page === "Filters"
+                    ? "Shape your station and schedule Marathon Play."
                   : page === "Downloaded Videos"
                     ? "See and arrange the files prepared for playback."
                   : page === "Settings"
@@ -745,6 +772,27 @@ function App() {
             </section>
           </>
         )}
+                {page === "Filters" && settings && (
+          <MarathonPage
+            settings={settings}
+            items={items}
+            filterPanel={
+              <FilterPanel
+                settings={settings}
+                stats={state?.filterStats}
+                disabled={!!busy || state?.state !== "stopped" || !!state?.syncing}
+                onChange={change}
+                onApply={() => void saveFilters()}
+              />
+            }
+            syncing={!!state?.syncing}
+            busy={busy}
+            current={marathonData}
+            onChange={change}
+            onSaveSource={() => void saveMediaSource()}
+            onRefresh={() => void loadMarathonData()}
+          />
+        )}
         {page === "Playlist" && (
           <section className="panel">
             <div className="panel-heading">
@@ -813,7 +861,8 @@ function App() {
                         item={items[v.index]}
                         index={v.index}
                         active={items[v.index].id === state?.current?.id}
-                        moveDisabled={!!busy || state?.syncing}
+                        marathon={isMarathonItem(items[v.index], marathonData?.entries ?? [])}
+                        moveDisabled={!!busy || state?.syncing || isMarathonItem(items[v.index], marathonData?.entries ?? [])}
                         dragging={draggedId === items[v.index].id}
                         dropEdge={
                           dropTarget?.index === v.index
@@ -1797,6 +1846,7 @@ function Status({ ok, label }: { ok: boolean; label: string }) {
   item,
   index,
   active = false,
+  marathon = false,
   moveDisabled = false,
   dragging = false,
   dropEdge,
@@ -1810,6 +1860,7 @@ function Status({ ok, label }: { ok: boolean; label: string }) {
   item: StoredItem;
   index: number;
   active?: boolean;
+  marathon?: boolean;
   moveDisabled?: boolean;
   dragging?: boolean;
   dropEdge?: "before" | "after";
@@ -1825,6 +1876,7 @@ function Status({ ok, label }: { ok: boolean; label: string }) {
       className={
         "playlist-row " +
         (active ? "playing-row " : "") +
+        (marathon ? "marathon-row " : "") +
         (dragging ? "dragging-row " : "") +
         (dropEdge ? "drop-target" : "")
       }
@@ -1876,6 +1928,7 @@ function Status({ ok, label }: { ok: boolean; label: string }) {
           {item.seriesKey && " · Series " + (item.seriesIndex ?? "")}
         </small>
       </div>
+      {marathon && <span className="marathon-row-badge">MARATHON PLAY</span>}
       <span
         className={!item.available || item.error ? "tag amber" : "row-duration"}
       >
