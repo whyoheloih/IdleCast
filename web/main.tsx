@@ -35,7 +35,7 @@ import type { Settings } from "../server/config";
 
 const FILTER_MIN_YEAR = 2011;
 import { APP_VERSION } from "../server/version";
-import type { StoredItem, PlaybackHistoryItem } from "../server/db";
+import type { StoredItem, PlaybackHistoryItem, Marathon } from "../server/db";
 import { OverlayEditor } from "./OverlayEditor";
 import { Credentials } from "./Credentials";
 import { YouTubeViewer } from "./YouTubeViewer";
@@ -64,6 +64,7 @@ type Snapshot = {
   } | null;
   bufferedCount: number;
   bufferTarget: number;
+  marathonSchedule: Marathon | null;
   downloadQueue: {
     totalBytes: number;
     active: Snapshot["download"];

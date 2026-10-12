@@ -18,10 +18,15 @@ import { buildHealth } from "./health.js";
 import { OverlayPreview } from "./preview.js";
 import { credentialStore } from "./credentials.js";
 import { APP_VERSION } from "./version.js";
+import { currentSchedule, previewSchedule, scheduleConstraints, type ScheduleMethod } from "./marathon-schedule.js";
 const digest = (token: string) =>
   createHash("sha256").update(token).digest("hex");
 export function createApp(c: Config, store: Store, engine: Engine) {
   const app = express();
+  queueMicrotask(() => { void currentSchedule(store, engine).then((schedule) => {
+    if (schedule?.validationErrors.some((error) => error.includes("boundary reconciliation"))) engine.event("Marathon queue boundary reconciliation failed during restart recovery", "error", { marathonId: schedule.marathon.id });
+    else if (schedule?.scheduleReached && !schedule.canActivate) engine.event("Recovered Marathon schedule is overdue; waiting for the fixed safe handoff boundary or source availability", "warn", { marathonId: schedule.marathon.id, scheduledStart: schedule.marathon.scheduledStart });
+  }).catch(() => {}); });
   const saveCredentials = credentialStore(c, store);
   const preview = new OverlayPreview(c);
   app.disable("x-powered-by");
@@ -395,6 +400,50 @@ export function createApp(c: Config, store: Store, engine: Engine) {
         : "Queue order updated",
     );
     res.json({ ok: true, moved: block.length });
+  });
+  const scheduleInput = z.object({
+    method: z.enum(["start", "end"]),
+    localDateTime: z.string().min(16).max(19),
+  }).strict();
+  app.get("/api/marathon-schedule", async (_req, res) => {
+    res.json(await currentSchedule(store, engine));
+  });
+  app.get("/api/marathons/:id/schedule/constraints", async (req, res) => {
+    try { res.json(await scheduleConstraints(store, engine, req.params.id)); }
+    catch (error) { res.status(404).json({ error: error instanceof Error ? error.message : "Marathon not found" }); }
+  });
+  app.post("/api/marathons/:id/schedule/preview", async (req, res) => {
+    const parsed = scheduleInput.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Choose Start Time or End Time and enter a Mountain Time date" });
+    try { res.json(await previewSchedule(store, engine, req.params.id, parsed.data.method as ScheduleMethod, parsed.data.localDateTime)); }
+    catch (error) { res.status(404).json({ error: error instanceof Error ? error.message : "Marathon not found" }); }
+  });
+  app.put("/api/marathons/:id/schedule", async (req, res) => {
+    const parsed = scheduleInput.safeParse(req.body);
+    if (!parsed.success) return res.status(400).json({ error: "Choose Start Time or End Time and enter a Mountain Time date" });
+    try {
+      const preview = await previewSchedule(store, engine, req.params.id, parsed.data.method as ScheduleMethod, parsed.data.localDateTime);
+      if (!preview.valid || preview.requestedTime === null || preview.calculatedStart === null || preview.calculatedEnd === null) {
+        const message = preview.validationErrors.join("; ") || "Invalid Marathon schedule";
+        const diagnosticMessage = message.includes("too early") ? `Marathon schedule requested too early — ${message}` : /snapshot is incomplete|source is unavailable/i.test(message) ? message : `Invalid or conflicting Marathon schedule — ${message}`;
+        engine.event(diagnosticMessage, "warn", { marathonId: req.params.id });
+        return res.status(400).json({ error: message, preview });
+      }
+      const scheduled = store.scheduleMarathon(req.params.id, parsed.data.method, preview.requestedTime, preview.calculatedStart, preview.calculatedEnd, preview.commitments);
+      engine.event(`Marathon scheduled: ${scheduled.marathon.name}`, "info", { marathonId: req.params.id, method: parsed.data.method, scheduledStart: preview.calculatedStart, scheduledEnd: preview.calculatedEnd, queueBoundary: preview.boundaryEntryId });
+      res.json({ schedule: scheduled, preview });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Marathon scheduling failed";
+      engine.event(`Invalid or conflicting Marathon schedule — ${message}`, "warn", { marathonId: req.params.id });
+      res.status(message.includes("Another Marathon") ? 409 : 400).json({ error: message });
+    }
+  });
+  app.delete("/api/marathons/:id/schedule", (req, res) => {
+    try {
+      const marathon = store.cancelMarathonSchedule(req.params.id);
+      engine.event(`Marathon schedule cancelled: ${marathon.marathon.name}`, "info", { marathonId: req.params.id });
+      res.json(marathon);
+    } catch (error) { res.status(409).json({ error: error instanceof Error ? error.message : "Schedule cancellation failed" }); }
   });
   app.get("/api/marathons", (_req, res) => res.json(store.marathons()));
   app.get("/api/marathons/:id", (req, res) => {

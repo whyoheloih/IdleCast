@@ -234,6 +234,31 @@ export class Engine extends EventEmitter {
       bufferedCount: this.bufferedCount,
       bufferTarget: this.bufferTarget,
       downloadQueue: this.downloadQueue(),
+      marathonSchedule: this.store.controllingMarathon()?.marathon ?? null,
+    };
+  }
+  marathonHandoffConstraints() {
+    const now = Date.now();
+    const commitments: Array<{ entryId: string; title: string; remainingSeconds: number }> = [];
+    if (this.state === "preparing")
+      return { safe: false, earliestStart: null, commitments, reason: "A normal-video transition is already being prepared; retry scheduling after it becomes active" };
+    const activeNormal = ["playing", "recovering"].includes(this.state) && this.current;
+    if (activeNormal) {
+      const duration = Number(this.currentMedia?.duration ?? activeNormal.duration);
+      if (!Number.isFinite(duration) || duration <= 0)
+        return { safe: false, earliestStart: null, commitments, reason: "The current video's remaining duration is unknown; scheduling cannot safely interrupt it" };
+      commitments.push({
+        entryId: activeNormal.id,
+        title: activeNormal.title,
+        remainingSeconds: Math.max(0, duration - Math.max(0, this.elapsed)),
+      });
+    }
+    const committedSeconds = commitments.reduce((sum, entry) => sum + entry.remainingSeconds, 0);
+    return {
+      safe: true,
+      earliestStart: now + (committedSeconds + 5 * 60) * 1000,
+      commitments,
+      reason: null,
     };
   }
   sync(): Promise<void> {

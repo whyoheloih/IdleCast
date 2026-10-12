@@ -28,6 +28,7 @@ Idlecast diagnostic codes are a permanent debugging API shared by the applicatio
 | `IC-DB` | SQLite database |
 | `IC-PL` | Playlist synchronization and eligibility |
 | `IC-LOCAL` | Local folder scanning and local media availability |
+| `IC-MAR` | Marathon scheduling, source readiness, and queue handoff |
 
 ## Health page behavior
 

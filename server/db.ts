@@ -4,7 +4,7 @@ import { defaults, settingsSchema, type Settings } from "./config.js";
 import type { PlaylistItem } from "./providers.js";
 import type { DiagnosticRecord } from "./diagnostics.js";
 export type MarathonSourceType = "youtube" | "local";
-export type MarathonStatus = "draft" | "scheduled" | "active" | "completed" | "cancelled" | "failed";
+export type MarathonStatus = "draft" | "scheduled" | "active" | "ending" | "completed" | "ended_early" | "cancelled" | "failed";
 export type Marathon = {
   id: string;
   name: string;
@@ -24,6 +24,10 @@ export type Marathon = {
   totalRuntime: number;
   createdAt: number;
   manualEnding: boolean;
+  schedulingMethod: "start" | "end" | null;
+  requestedTime: number | null;
+  committedQueue: Array<{ entryId: string; title: string; remainingSeconds: number }>;
+  scheduleUpdatedAt: number | null;
 };
 export type MarathonEntry = {
   id: string;
@@ -47,6 +51,7 @@ export type PlaybackHistoryItem = {
   duration: number | null;
   status: "playing" | "played" | "skipped" | "failed" | "stopped" | "interrupted";
   watchedSeconds: number;
+  queueEntryId?: string | null;
 };
 export type StoredItem = PlaylistItem & {
   failures: number;
@@ -69,7 +74,7 @@ export class Store {
   private migrate() {
     const version = (this.db.prepare("PRAGMA user_version").get() as any)
       .user_version;
-    if (version > 6)
+    if (version > 7)
       throw new Error("Database is newer than this version of IdleCast");
     if (version === 0)
       this.db.exec(`
@@ -144,6 +149,17 @@ export class Store {
         );
         CREATE UNIQUE INDEX marathon_entry_order ON marathon_entries(marathonId,position);
         PRAGMA user_version=6;
+        COMMIT;`);
+    if (version <= 6)
+      this.db.exec(`
+        BEGIN IMMEDIATE;
+        ALTER TABLE marathons ADD COLUMN schedulingMethod TEXT;
+        ALTER TABLE marathons ADD COLUMN requestedTime INTEGER;
+        ALTER TABLE marathons ADD COLUMN committedQueue TEXT NOT NULL DEFAULT '[]';
+        ALTER TABLE marathons ADD COLUMN scheduleUpdatedAt INTEGER;
+        ALTER TABLE playback_history ADD COLUMN queueEntryId TEXT;
+        CREATE INDEX playback_history_queue_entry ON playback_history(queueEntryId,startedAt);
+        PRAGMA user_version=7;
         COMMIT;`);
   }
   get<T>(key: string, fallback: T): T {
@@ -311,8 +327,8 @@ export class Store {
   }
   startPlayback(item: PlaylistItem) {
     const result = this.db
-      .prepare("INSERT INTO playback_history(startedAt,videoId,title,channel,duration,status) VALUES(?,?,?,?,?,'playing')")
-      .run(Date.now(), item.videoId, item.title, item.channel, item.duration);
+      .prepare("INSERT INTO playback_history(startedAt,videoId,title,channel,duration,status,queueEntryId) VALUES(?,?,?,?,?,'playing',?)")
+      .run(Date.now(), item.videoId, item.title, item.channel, item.duration, item.id);
     return Number(result.lastInsertRowid);
   }
   finishPlayback(id: number, status: PlaybackHistoryItem["status"], watchedSeconds: number) {
@@ -340,10 +356,11 @@ export class Store {
       totalEntries: items.length,
       totalRuntime: items.reduce((sum, item) => sum + (item.duration ?? 0), 0),
       createdAt: Date.now(), manualEnding: false,
+      schedulingMethod: null, requestedTime: null, committedQueue: [], scheduleUpdatedAt: null,
     };
     this.db.exec("BEGIN IMMEDIATE");
     try {
-      this.db.prepare("INSERT INTO marathons VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(
+      this.db.prepare("INSERT INTO marathons(id,name,sourceType,sourceIdentity,status,schedulingMode,scheduledStart,scheduledEnd,actualStart,actualEnd,normalQueueBoundary,currentPosition,completedEntries,failedEntries,totalEntries,totalRuntime,createdAt,manualEnding) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)").run(
         marathon.id, marathon.name, marathon.sourceType, marathon.sourceIdentity,
         marathon.status, marathon.schedulingMode, marathon.scheduledStart,
         marathon.scheduledEnd, marathon.actualStart, marathon.actualEnd,
@@ -368,14 +385,35 @@ export class Store {
   }
   marathons(): Marathon[] {
     return (this.db.prepare("SELECT * FROM marathons ORDER BY createdAt DESC").all() as any[])
-      .map((row) => ({ ...row, manualEnding: !!row.manualEnding }));
+      .map((row) => ({ ...row, manualEnding: !!row.manualEnding, committedQueue: JSON.parse(row.committedQueue ?? "[]") }));
   }
   marathon(id: string): { marathon: Marathon; entries: MarathonEntry[] } | null {
     const row = this.db.prepare("SELECT * FROM marathons WHERE id=?").get(id) as any;
     if (!row) return null;
     const entries = (this.db.prepare("SELECT * FROM marathon_entries WHERE marathonId=? ORDER BY position").all(id) as any[])
       .map((entry) => ({ ...entry, metadata: JSON.parse(entry.metadata) }));
-    return { marathon: { ...row, manualEnding: !!row.manualEnding }, entries };
+    return { marathon: { ...row, manualEnding: !!row.manualEnding, committedQueue: JSON.parse(row.committedQueue ?? "[]") }, entries };
+  }
+  scheduleMarathon(id: string, method: "start" | "end", requestedTime: number, calculatedStart: number, calculatedEnd: number, commitments: Array<{ entryId: string; title: string; remainingSeconds: number }>) {
+    const existing = this.db.prepare("SELECT id FROM marathons WHERE status IN ('scheduled','active','ending') AND id<>?").get(id) as any;
+    if (existing) throw new Error("Another Marathon is already scheduled or active");
+    const result = this.db.prepare("UPDATE marathons SET status='scheduled',schedulingMode='scheduled',schedulingMethod=?,requestedTime=?,scheduledStart=?,scheduledEnd=?,normalQueueBoundary=?,committedQueue=?,scheduleUpdatedAt=? WHERE id=? AND status IN ('draft','scheduled','cancelled')").run(
+      method, requestedTime, calculatedStart, calculatedEnd, commitments.at(-1)?.entryId ?? null, JSON.stringify(commitments), Date.now(), id,
+    );
+    if (!result.changes) throw new Error("Only a draft or scheduled Marathon can be scheduled");
+    return this.marathon(id)!;
+  }
+  cancelMarathonSchedule(id: string) {
+    const result = this.db.prepare("UPDATE marathons SET status='draft',schedulingMode='manual',schedulingMethod=NULL,requestedTime=NULL,scheduledStart=NULL,scheduledEnd=NULL,normalQueueBoundary=NULL,committedQueue='[]',scheduleUpdatedAt=? WHERE id=? AND status='scheduled'").run(Date.now(), id);
+    if (!result.changes) throw new Error("Only a scheduled Marathon can be cancelled");
+    return this.marathon(id)!;
+  }
+  controllingMarathon() {
+    const row = this.db.prepare("SELECT id FROM marathons WHERE status IN ('scheduled','active','ending') ORDER BY scheduleUpdatedAt DESC LIMIT 1").get() as any;
+    return row ? this.marathon(row.id) : null;
+  }
+  completedQueueEntriesSince(timestamp: number) {
+    return new Set((this.db.prepare("SELECT DISTINCT queueEntryId FROM playback_history WHERE endedAt>=? AND queueEntryId IS NOT NULL AND status IN ('played','skipped','failed')").all(timestamp) as any[]).map((row) => String(row.queueEntryId)));
   }
   recordDiagnostic(record: DiagnosticRecord) {
     const records = this.get<DiagnosticRecord[]>("diagnostics", []);
