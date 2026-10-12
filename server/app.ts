@@ -25,7 +25,7 @@ export function createApp(c: Config, store: Store, engine: Engine) {
   const app = express();
   queueMicrotask(() => { void currentSchedule(store, engine).then((schedule) => {
     if (schedule?.validationErrors.some((error) => error.includes("boundary reconciliation"))) engine.event("Marathon queue boundary reconciliation failed during restart recovery", "error", { marathonId: schedule.marathon.id });
-    else if (schedule?.scheduleReached && !schedule.canActivate) engine.event("Recovered Marathon schedule is overdue; waiting for the fixed safe handoff boundary or source availability", "warn", { marathonId: schedule.marathon.id, scheduledStart: schedule.marathon.scheduledStart });
+    else if (schedule?.marathon.status === "scheduled" && schedule.scheduleReached && !schedule.canActivate) engine.event("Recovered Marathon schedule is overdue; waiting for the fixed safe handoff boundary or source availability", "warn", { marathonId: schedule.marathon.id, scheduledStart: schedule.marathon.scheduledStart });
   }).catch(() => {}); });
   const saveCredentials = credentialStore(c, store);
   const preview = new OverlayPreview(c);

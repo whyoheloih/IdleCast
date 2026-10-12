@@ -3,7 +3,7 @@ import { readFile, stat } from "node:fs/promises";
 import { readdirSync, statSync } from "node:fs";
 import path from "node:path";
 import type { Config, Settings } from "./config.js";
-import { Store, type StoredItem } from "./db.js";
+import { Store, type MarathonEntry, type StoredItem } from "./db.js";
 import {
   YouTubePlaylistProvider,
   LocalMediaSource,
@@ -101,6 +101,8 @@ export class Engine extends EventEmitter {
   private activationGeneration = 0;
   private transitionGeneration = 0;
   private metadataTimer: ReturnType<typeof setTimeout> | null = null;
+  private marathonHandoffPending = false;
+  private marathonHandoffReported = false;
   previewSource() {
     if (this.state !== "playing" || !this.currentMedia || !this.clip)
       return null;
@@ -368,8 +370,18 @@ export class Engine extends EventEmitter {
     this.bufferedIds.clear();
     this.preparedMedia.clear();
     this.bufferedCount = 0;
+    const controllingMarathon = this.store.controllingMarathon()?.marathon;
+    const completedCommitments = controllingMarathon
+      ? this.store.completedQueueEntriesSince(controllingMarathon.scheduleUpdatedAt ?? controllingMarathon.createdAt)
+      : new Set<string>();
+    const marathonOwnsStartup = Boolean(controllingMarathon?.status === "active" || (
+      controllingMarathon?.status === "scheduled" &&
+      controllingMarathon.scheduledStart !== null &&
+      Date.now() >= controllingMarathon.scheduledStart &&
+      controllingMarathon.committedQueue.every((entry) => completedCommitments.has(entry.entryId))
+    ));
     const initial = this.bufferCandidates(this.store.all());
-    this.bufferTarget = Math.min(this.startupBufferTarget, initial.length);
+    this.bufferTarget = marathonOwnsStartup ? 0 : Math.min(this.startupBufferTarget, initial.length);
     for (const item of initial.slice(0, this.bufferTarget))
       if (!this.cachedSizes.has(item.videoId))
         this.downloadStates.set(item.videoId, {
@@ -382,7 +394,7 @@ export class Engine extends EventEmitter {
         retries: 0,
       };
     this.state = "buffering";
-    this.event("Playback requested; preparing startup buffer");
+    this.event(marathonOwnsStartup ? "Playback requested; restoring Marathon through the existing transition pipeline" : "Playback requested; preparing startup buffer");
     this.task = (async () => {
       while (!signal.aborted && this.bufferedIds.size < this.bufferTarget) {
         await this.fillBuffer(
@@ -825,6 +837,74 @@ export class Engine extends EventEmitter {
       });
   }
 
+  private marathonItem(entry: MarathonEntry): StoredItem {
+    const metadata = entry.metadata ?? {};
+    const youtubeId = entry.youtubeVideoId ?? "";
+    const localIdentity = entry.localIdentity ?? "";
+    return {
+      id: `marathon:${entry.id}`,
+      videoId: entry.sourceType === "local" ? `local:${localIdentity}` : youtubeId,
+      position: entry.position,
+      title: entry.title,
+      channel: String(metadata.channel ?? ""),
+      thumbnail: String(metadata.thumbnail ?? ""),
+      available: true,
+      duration: entry.duration,
+      publishedAt: String(metadata.publishedAt ?? ""),
+      liveStatus: "none",
+      failures: 0,
+      failureCount: 0,
+      retryAt: 0,
+      error: null,
+      seriesKey: String(metadata.seriesKey ?? ""),
+      seriesIndex: typeof metadata.seriesIndex === "number" ? metadata.seriesIndex : null,
+      sourceType: entry.sourceType,
+      localIdentity: entry.localIdentity ?? undefined,
+      localPath: entry.localPath ?? undefined,
+      youtubeVideoId: entry.youtubeVideoId ?? undefined,
+      videoWidth: typeof metadata.videoWidth === "number" ? metadata.videoWidth : null,
+      videoHeight: typeof metadata.videoHeight === "number" ? metadata.videoHeight : null,
+      frameRate: String(metadata.frameRate ?? ""),
+      videoCodec: String(metadata.videoCodec ?? ""),
+      audioCodec: String(metadata.audioCodec ?? ""),
+      hasAudio: typeof metadata.hasAudio === "boolean" ? metadata.hasAudio : undefined,
+      isShort: false,
+    };
+  }
+
+  private marathonChoice(items: StoredItem[]) {
+    const record = this.store.controllingMarathon();
+    if (!record) return null;
+    const { marathon, entries } = record;
+    if (marathon.status === "scheduled") {
+      const completed = this.store.completedQueueEntriesSince(marathon.scheduleUpdatedAt ?? marathon.createdAt);
+      const remaining = marathon.committedQueue.filter((entry) => !completed.has(entry.entryId));
+      if (remaining.length) {
+        const committed = items.find((item) => item.id === remaining[0].entryId);
+        return committed
+          ? { item: committed, index: items.indexOf(committed), marathon: null, blocked: null, waitMs: 0, blockedLevel: "info" as const }
+          : { item: null, index: 0, marathon: null, blocked: `Marathon queue boundary reconciliation failed: committed entry ${remaining[0].title} is unavailable`, waitMs: 60000, blockedLevel: "error" as const };
+      }
+      if (marathon.scheduledStart === null)
+        return { item: null, index: 0, marathon: null, blocked: "Scheduled Marathon has no calculated start time", waitMs: 60000, blockedLevel: "error" as const };
+      if (Date.now() < marathon.scheduledStart)
+        return { item: null, index: 0, marathon: null, blocked: "Normal queue boundary complete; standby is holding output until the scheduled Marathon start", waitMs: Math.max(1000, Math.min(60000, marathon.scheduledStart - Date.now())), blockedLevel: "info" as const };
+    }
+    if (!["scheduled", "active"].includes(marathon.status)) return null;
+    const entry = entries.find((candidate) => candidate.position === marathon.currentPosition);
+    if (!entry)
+      return { item: null, index: 0, marathon: null, blocked: "Marathon snapshot is incomplete at the current position", waitMs: 60000, blockedLevel: "error" as const };
+    if (!Number.isFinite(entry.duration) || Number(entry.duration) <= 0)
+      return { item: null, index: 0, marathon: null, blocked: `Marathon snapshot entry has no exact duration: ${entry.title}`, waitMs: 60000, blockedLevel: "error" as const };
+    return {
+      item: this.marathonItem(entry),
+      index: 0,
+      marathon: { id: marathon.id, name: marathon.name, sourceType: marathon.sourceType, scheduleToken: marathon.scheduleUpdatedAt, entry },
+      blocked: null,
+      waitMs: 0,
+      blockedLevel: "info" as const,
+    };
+  }
   private async play(
     s: Settings,
     signal: AbortSignal,
@@ -837,12 +917,24 @@ export class Engine extends EventEmitter {
         "cursor",
         null,
       );
-      let index = Math.max(
+      const intended = this.marathonChoice(items);
+      const marathon = intended?.marathon ?? null;
+      let index = intended?.index ?? Math.max(
         0,
         items.findIndex((i) => i.id === saved?.id),
       );
-      let item: StoredItem | undefined;
-      const shortStartsRemaining = s.shuffle
+      let item: StoredItem | undefined = intended?.item ?? undefined;
+      if (intended?.blocked) {
+        this.state = "waiting";
+        this.current = null;
+        this.event(intended.blocked, intended.blockedLevel);
+        const idle = standby(this.config, s, epoch, signal, () =>
+          this.event("Marathon standby encoder failed; retry scheduled", "error"),
+        );
+        try { await delay(intended.waitMs, signal); } finally { await idle.stop(); }
+        continue;
+      }
+      const shortStartsRemaining = !marathon && s.shuffle
         ? this.store.get(
             "shuffleShortStartsRemaining",
             this.store.get("shuffleNeedsShortStart", true) ? 2 : 0,
@@ -880,7 +972,7 @@ export class Engine extends EventEmitter {
           !canStartShuffledQueue(candidate)
         ) &&
         followsShuffleRules(candidate, resuming);
-      for (let k = 0; k < items.length; k++) {
+      if (!item) for (let k = 0; k < items.length; k++) {
         const candidate = items[(index + k) % items.length];
         const resuming = candidate.id === saved?.id && saved.offset > 0;
         if (canPlay(candidate, resuming)) {
@@ -890,6 +982,10 @@ export class Engine extends EventEmitter {
         }
       }
       if (!item) {
+        if (this.marathonHandoffPending && !this.marathonHandoffReported) {
+          this.marathonHandoffReported = true;
+          this.event("Marathon-to-normal handoff failed: no eligible normal video is currently available; standby remains active", "error");
+        }
         this.state = "waiting";
         this.current = null;
         this.event(
@@ -912,7 +1008,7 @@ export class Engine extends EventEmitter {
         }
         continue;
       }
-      const resume = item.id === saved?.id ? Math.max(0, saved.offset) : 0;
+      const resume = !marathon && item.id === saved?.id ? Math.max(0, saved.offset) : 0;
       const previousVideoId = this.current?.videoId ?? "none";
       const transition = ++this.transitionGeneration;
       const transitionStartedAt = Date.now();
@@ -930,6 +1026,8 @@ export class Engine extends EventEmitter {
       let historyFinished = false;
       let playbackOffset = resume;
       let sourceReady = false;
+      let marathonActivated = false;
+      let marathonOwnershipStale = false;
       const finishHistory = (
         status: "played" | "skipped" | "failed" | "stopped" | "interrupted",
       ) => {
@@ -942,9 +1040,23 @@ export class Engine extends EventEmitter {
         historyFinished = true;
       };
       try {
-        source.retain?.([...this.bufferedIds]);
+        if (marathon) {
+          const selectedSourceType = s.mediaSource === "local" ? "local" : "youtube";
+          if (marathon.sourceType !== selectedSourceType)
+            throw new Error(`Marathon source mode ${marathon.sourceType} does not match the selected ${selectedSourceType} mode`);
+          if (marathon.entry.playbackState === "interrupted" && /restarted/i.test(marathon.entry.lastError ?? ""))
+            this.event(`Marathon recovery resumed at unfinished entry ${marathon.entry.position + 1}: ${item.title}`, "info", { marathonId: marathon.id, entryId: marathon.entry.id });
+          try {
+            this.store.prepareMarathonEntry(marathon.id, marathon.entry.id, marathon.entry.position, marathon.scheduleToken);
+          } catch (error) {
+            this.event(`Marathon progress persistence failed during preparation — ${error instanceof Error ? error.message : "unknown database error"}`, "error", { marathonId: marathon.id, entryId: marathon.entry.id });
+            throw error;
+          }
+          this.event(`Marathon entry ${marathon.entry.position + 1} preparing: ${item.title}`);
+        }
+        source.retain?.([...this.bufferedIds, ...(marathon ? [item.videoId] : [])]);
         this.event("Preparing media: " + item.title + (item.sourceType === "local" ? ". Validating the original local file before playback." : ". The complete video is downloaded before playback."));
-        const prepared = this.preparedMedia.get(item.videoId);
+        const prepared = this.preparedMedia.get(marathon ? item.id : item.videoId);
         if (!prepared) {
           this.event(`Transition ${transition}: source is not preloaded; standby fallback started`, "warn");
           idle = standby(this.config, s, epoch, clipSignal, (reason) =>
@@ -976,6 +1088,7 @@ export class Engine extends EventEmitter {
             ? `Audio input: ${audio.codec_name}, ${audio.sample_rate} Hz, ${audio.channels} channels; output AAC ${outputAudioRate} Hz stereo`
             : `Video has no audio; using ${outputAudioRate} Hz stereo silence`,
         );
+        const publishedAt = marathon ? item.publishedAt ?? "" : this.store.get<Record<string, string>>("uploadDates", {})[item.videoId];
         const ov = await overlay(
           this.config,
           {
@@ -983,9 +1096,7 @@ export class Engine extends EventEmitter {
             overlay: { ...s.overlay, title: item.title },
           },
           undefined,
-          this.store.get<Record<string, string>>("uploadDates", {})[
-            item.videoId
-          ],
+          publishedAt,
           { offset, total: duration },
         );
         clipSignal.throwIfAborted();
@@ -1042,12 +1153,14 @@ export class Engine extends EventEmitter {
           this.store.set("shuffleShortStartsRemaining", remaining);
           this.store.set("shuffleNeedsShortStart", remaining > 0);
         }
-        this.store.set("lastVideoLong", isLongVideo(item));
-        this.store.set("lastVideoDuration", item.duration);
-        this.store.set("lastVideoSeries", item.seriesKey ?? "");
-        this.store.set("cursor", { id: item.id, offset });
+        if (!marathon) {
+          this.store.set("lastVideoLong", isLongVideo(item));
+          this.store.set("lastVideoDuration", item.duration);
+          this.store.set("lastVideoSeries", item.seriesKey ?? "");
+          this.store.set("cursor", { id: item.id, offset });
+          this.scheduleRefill(source, items, signal, index);
+        }
         this.event();
-        this.scheduleRefill(source, items, signal, index);
         let lastProgress = Date.now(),
           lastCheckpoint = 0,
           lastFrame = -1,
@@ -1062,6 +1175,27 @@ export class Engine extends EventEmitter {
               const n = Number(line.slice(6));
               if (Number.isFinite(n) && n > lastFrame) {
                 if (lastFrame < 0) {
+                  if (!marathon && this.marathonHandoffPending) {
+                    this.marathonHandoffPending = false;
+                    this.marathonHandoffReported = false;
+                    this.event("Normal playback resumed after Marathon completion");
+                  }
+                  if (marathon && !marathonActivated) {
+                    try {
+                      marathonActivated = this.store.activateMarathonEntry(marathon.id, marathon.entry.id, marathon.entry.position, marathon.scheduleToken);
+                    } catch (error) {
+                      this.event(`Marathon progress persistence failed during activation — ${error instanceof Error ? error.message : "unknown database error"}`, "error", { marathonId: marathon.id, entryId: marathon.entry.id });
+                      clipController.abort();
+                      return;
+                    }
+                    if (!marathonActivated) {
+                      marathonOwnershipStale = true;
+                      this.event("Duplicate or stale Marathon activation suppressed", "warn", { marathonId: marathon.id, entryId: marathon.entry.id });
+                      clipController.abort();
+                      return;
+                    }
+                    this.event(`Marathon started/resumed at entry ${marathon.entry.position + 1}: ${item!.title}`, "info", { marathonId: marathon.id, entryId: marathon.entry.id });
+                  }
                   const activatedAt = Date.now();
                   this.store.set("health.lastTransitionSuccess", { time: activatedAt, videoId: item!.videoId, title: item!.title, preparationMs });
                   this.store.set("health.lastPlaybackStart", { time: activatedAt, videoId: item!.videoId, title: item!.title, hasAudio, audioSampleRate: audio?.sample_rate ?? null, audioChannels: audio?.channels ?? null });
@@ -1080,15 +1214,12 @@ export class Engine extends EventEmitter {
                       this.current?.videoId !== item!.videoId ||
                       this.state !== "playing"
                     ) return;
-                    const publishedAt = this.store.get<Record<string, string>>(
-                      "uploadDates",
-                      {},
-                    )[item!.videoId];
+                    const activePublishedAt = marathon ? item!.publishedAt ?? "" : this.store.get<Record<string, string>>("uploadDates", {})[item!.videoId];
                     const activeSettings = {
                       ...s,
                       overlay: { ...s.overlay, title: item!.title },
                     };
-                    const expected = overlayLayout(activeSettings, publishedAt);
+                    const expected = overlayLayout(activeSettings, activePublishedAt);
                     const directory = path.join(this.config.DATA_DIR, "overlay");
                     void Promise.all([
                       readFile(path.join(directory, "title.txt"), "utf8").catch(() => ""),
@@ -1103,7 +1234,7 @@ export class Engine extends EventEmitter {
                         this.config,
                         activeSettings,
                         undefined,
-                        publishedAt,
+                        activePublishedAt,
                         { offset: this.elapsed, total: duration },
                       ).then(() =>
                         this.event("Restored stale title/date overlay", "warn"),
@@ -1116,7 +1247,7 @@ export class Engine extends EventEmitter {
                 lastFrame = n;
                 lastProgress = Date.now();
                 this.elapsed = Math.min(duration, offset + n / s.fps);
-                if (Date.now() - lastCheckpoint > 5000) {
+                if (!marathon && Date.now() - lastCheckpoint > 5000) {
                   lastCheckpoint = Date.now();
                   this.store.set("cursor", {
                     id: item!.id,
@@ -1150,38 +1281,95 @@ export class Engine extends EventEmitter {
           this.event(`Transition ${transition}: producer exited with code ${code} — ${reason}`, "error");
           throw new Error(reason);
         }
-        this.store.success(item.id);
         finishHistory("played");
-        consumed = true;
-        this.event("Finished: " + item.title);
+        if (marathon) {
+          let completed;
+          try {
+            completed = this.store.completeMarathonEntry(marathon.id, marathon.entry.id, marathon.entry.position);
+          } catch (error) {
+            this.event(`Marathon progress persistence failed during completion — ${error instanceof Error ? error.message : "unknown database error"}`, "error", { marathonId: marathon.id, entryId: marathon.entry.id });
+            throw error;
+          }
+          consumed = completed.applied;
+          if (!completed.applied)
+            this.event("Duplicate or stale Marathon completion suppressed", "warn", { marathonId: marathon.id, entryId: marathon.entry.id });
+          else if (completed.finished) {
+            this.marathonHandoffPending = true;
+            this.marathonHandoffReported = false;
+            this.event(`Marathon completed: ${marathon.name}`, "info", { marathonId: marathon.id });
+          }
+          else
+            this.event(`Marathon entry completed: ${item.title}`, "info", { marathonId: marathon.id, entryId: marathon.entry.id });
+        } else {
+          this.store.success(item.id);
+          consumed = true;
+          this.event("Finished: " + item.title);
+        }
       } catch (error) {
-        if (signal.aborted) break;
+        const message = error instanceof Error ? error.message : "Media failed; retry in 5 minutes";
+        if (signal.aborted) {
+          if (marathon) {
+            try { this.store.interruptMarathonEntry(marathon.id, marathon.entry.id, "Playback stopped before completion"); }
+            catch (error) { this.event(`Marathon progress persistence failed while stopping — ${error instanceof Error ? error.message : "unknown database error"}`, "error", { marathonId: marathon.id, entryId: marathon.entry.id }); }
+          }
+          break;
+        }
         if (this.skipRequested) {
           finishHistory("skipped");
-          consumed = true;
-          this.event("Skipped: " + item.title);
+          if (marathon) {
+            let skipped;
+            try {
+              skipped = this.store.skipMarathonEntry(marathon.id, marathon.entry.id, marathon.entry.position);
+            } catch (error) {
+              this.event(`Marathon progress persistence failed during skip — ${error instanceof Error ? error.message : "unknown database error"}`, "error", { marathonId: marathon.id, entryId: marathon.entry.id });
+              throw error;
+            }
+            consumed = skipped.applied;
+            if (!skipped.applied)
+              this.event("Duplicate or stale Marathon skip suppressed", "warn", { marathonId: marathon.id, entryId: marathon.entry.id });
+            else {
+              this.event(`Marathon entry skipped: ${item.title}`, "warn", { marathonId: marathon.id, entryId: marathon.entry.id });
+              if (skipped.finished) {
+                this.marathonHandoffPending = true;
+                this.marathonHandoffReported = false;
+              }
+            }
+          } else {
+            consumed = true;
+            this.event("Skipped: " + item.title);
+          }
+        } else if (marathon) {
+          if (marathonOwnershipStale || /ownership changed before preparation/i.test(message)) {
+            this.event("Duplicate or stale Marathon activation suppressed", "warn", { marathonId: marathon.id, entryId: marathon.entry.id });
+            consumed = false;
+            this.state = "selecting";
+            continue;
+          }
+          finishHistory("failed");
+          consumed = false;
+          try {
+            this.store.interruptMarathonEntry(marathon.id, marathon.entry.id, message);
+          } catch (error) {
+            this.event(`Marathon progress persistence failed while preserving the interrupted entry — ${error instanceof Error ? error.message : "unknown database error"}`, "error", { marathonId: marathon.id, entryId: marathon.entry.id });
+          }
+          const marathonFailure = /local media file missing|external drive disconnected|source mode .* does not match/i.test(message)
+            ? "Marathon entry unavailable"
+            : marathonActivated ? "Marathon playback interrupted" : "Marathon entry preparation failed";
+          this.event(`${marathonFailure}; position preserved: ${item.title} — ${message}`, "error", { marathonId: marathon.id, entryId: marathon.entry.id });
+          await delay(60000, signal).catch(() => {});
         } else {
-          // A source that fails after probing must leave the prepared set too.
-          // Otherwise the same corrupt/incompatible cache entry occupies a buffer
-          // slot and is retried forever after its cooldown.
-          const message =
-            error instanceof Error
-              ? error.message
-              : "Media failed; retry in 5 minutes";
+          if (this.marathonHandoffPending && !this.marathonHandoffReported) {
+            this.marathonHandoffReported = true;
+            this.event(`Marathon-to-normal handoff failed: ${message}`, "error");
+          }
           const pauseQueue = !sourceReady && pausesDownloadQueue(message);
           finishHistory("failed");
           consumed = !pauseQueue;
           this.recordFailure(item, message);
-          this.event(
-            "Media failed: " +
-              item.title +
-              " \u2014 " +
-              message,
-            "warn",
-          );
+          this.event("Media failed: " + item.title + " — " + message, "warn");
           if (pauseQueue) {
             this.event(
-              item.sourceType === "local" ? "Playback is holding this position for 60 seconds while the local folder or drive is unavailable" : "Playback is holding this position for 60 seconds so a global downloader problem does not cycle through the playlist",
+              item.sourceType === "local" ? "Playback is holding this position for 60 seconds while the local folder or drive is unavailable" : "Playback is holding this position for 60 seconds so a global downloader problem does not cycle through every video",
               "warn",
             );
             await delay(60000, signal).catch(() => {});
@@ -1198,7 +1386,8 @@ export class Engine extends EventEmitter {
         if (this.clip === clipController) this.clip = null;
         this.event(`Transition ${transition}: source cleanup complete`);
       }
-      if (consumed) {
+      this.state = "selecting";
+      if (consumed && !marathon) {
         this.bufferedIds.delete(item.videoId);
         this.preparedMedia.delete(item.videoId);
         this.downloadStates.delete(item.videoId);
@@ -1206,11 +1395,12 @@ export class Engine extends EventEmitter {
         this.bufferedCount = this.bufferedIds.size;
         await source.remove?.(item.videoId).catch(() => {});
         this.event();
-        // Re-read after resync; advance by identity so changes do not resurrect removed items.
         const fresh = this.store.all();
         const at = fresh.findIndex((i) => i.id === item!.id);
         const next = fresh[(at + 1) % Math.max(1, fresh.length)];
         this.store.set("cursor", next ? { id: next.id, offset: 0 } : null);
+      } else if (consumed && marathon) {
+        this.event();
       }
     }
     this.download = null;
@@ -1249,6 +1439,11 @@ export class Engine extends EventEmitter {
   }
 
   queueChanged() {
+    const marathon = this.store.controllingMarathon()?.marathon;
+    if (marathon?.status === "active" || this.current?.id.startsWith("marathon:")) {
+      this.event("Normal queue update saved; buffer changes are deferred until Marathon playback ends");
+      return;
+    }
     if (!this.activeSource || this.queueRefreshPending) return;
     this.queueRefreshPending = true;
     const refresh = async () => {

@@ -119,12 +119,12 @@ export async function currentSchedule(store: Store, engine: Engine) {
   const commitments = marathon.committedQueue.map((entry) => ({ ...entry, completed: completed.has(entry.entryId) }));
   const remainingCommitments = commitments.filter((entry) => !entry.completed);
   const queueIds = new Set(store.all().map((item) => item.id));
-  const unreconciled = remainingCommitments.filter((entry) => entry.entryId !== engine.current?.id && !queueIds.has(entry.entryId));
+  const unreconciled = marathon.status === "scheduled" ? remainingCommitments.filter((entry) => entry.entryId !== engine.current?.id && !queueIds.has(entry.entryId)) : [];
   const now = Date.now();
   const requestedStart = marathon.scheduledStart;
   const scheduleReached = requestedStart !== null && now >= requestedStart;
   const hasCommittedNormal = !["stopped", "buffering", "starting", "waiting"].includes(engine.state) && !!engine.current;
-  const activeOutsideBoundary = hasCommittedNormal && !commitments.some((entry) => entry.entryId === engine.current?.id);
+  const activeOutsideBoundary = marathon.status === "scheduled" && hasCommittedNormal && !commitments.some((entry) => entry.entryId === engine.current?.id);
   const handoffSatisfied = remainingCommitments.length === 0 && unreconciled.length === 0 && !activeOutsideBoundary;
   const source = await sourceAvailability(marathon, record.entries);
   const validationErrors: string[] = [];
@@ -145,8 +145,8 @@ export async function currentSchedule(store: Store, engine: Engine) {
     scheduleReached,
     handoffSatisfied,
     canActivate: marathon.status === "scheduled" && scheduleReached && handoffSatisfied && source.available,
-    estimatedDelaySeconds: scheduleReached && !handoffSatisfied ? Math.max(0, Math.ceil((now - requestedStart!) / 1000)) : 0,
-    diagnosticCode: unreconciled.length ? "IC-MAR-007" : !source.available ? "IC-MAR-002" : exactRuntime(record.entries) === null ? "IC-MAR-003" : scheduleReached && !handoffSatisfied ? "IC-MAR-004" : null,
+    estimatedDelaySeconds: marathon.status === "scheduled" && scheduleReached && !handoffSatisfied ? Math.max(0, Math.ceil((now - requestedStart!) / 1000)) : 0,
+    diagnosticCode: unreconciled.length ? "IC-MAR-007" : !source.available ? "IC-MAR-002" : exactRuntime(record.entries) === null ? "IC-MAR-003" : marathon.status === "scheduled" && scheduleReached && !handoffSatisfied ? "IC-MAR-004" : null,
     validationErrors,
     sourceAvailable: source.available,
   };

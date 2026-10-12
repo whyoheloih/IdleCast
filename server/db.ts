@@ -28,6 +28,9 @@ export type Marathon = {
   requestedTime: number | null;
   committedQueue: Array<{ entryId: string; title: string; remainingSeconds: number }>;
   scheduleUpdatedAt: number | null;
+  currentEntryId: string | null;
+  currentEntryState: "preparing" | "playing" | "interrupted" | null;
+  lastCompletedEntryId: string | null;
 };
 export type MarathonEntry = {
   id: string;
@@ -40,6 +43,10 @@ export type MarathonEntry = {
   title: string;
   duration: number | null;
   metadata: Record<string, unknown>;
+  playbackState: "pending" | "preparing" | "playing" | "interrupted" | "completed" | "failed" | "skipped";
+  startedAt: number | null;
+  completedAt: number | null;
+  lastError: string | null;
 };
 export type PlaybackHistoryItem = {
   id: number;
@@ -70,11 +77,12 @@ export class Store {
     );
     this.migrate();
     this.db.prepare("UPDATE playback_history SET status='interrupted',endedAt=? WHERE status='playing'").run(Date.now());
+    this.recoverMarathonPlayback();
   }
   private migrate() {
     const version = (this.db.prepare("PRAGMA user_version").get() as any)
       .user_version;
-    if (version > 7)
+    if (version > 8)
       throw new Error("Database is newer than this version of IdleCast");
     if (version === 0)
       this.db.exec(`
@@ -160,6 +168,18 @@ export class Store {
         ALTER TABLE playback_history ADD COLUMN queueEntryId TEXT;
         CREATE INDEX playback_history_queue_entry ON playback_history(queueEntryId,startedAt);
         PRAGMA user_version=7;
+        COMMIT;`);
+    if (version <= 7)
+      this.db.exec(`
+        BEGIN IMMEDIATE;
+        ALTER TABLE marathons ADD COLUMN currentEntryId TEXT;
+        ALTER TABLE marathons ADD COLUMN currentEntryState TEXT;
+        ALTER TABLE marathons ADD COLUMN lastCompletedEntryId TEXT;
+        ALTER TABLE marathon_entries ADD COLUMN playbackState TEXT NOT NULL DEFAULT 'pending';
+        ALTER TABLE marathon_entries ADD COLUMN startedAt INTEGER;
+        ALTER TABLE marathon_entries ADD COLUMN completedAt INTEGER;
+        ALTER TABLE marathon_entries ADD COLUMN lastError TEXT;
+        PRAGMA user_version=8;
         COMMIT;`);
   }
   get<T>(key: string, fallback: T): T {
@@ -357,6 +377,7 @@ export class Store {
       totalRuntime: items.reduce((sum, item) => sum + (item.duration ?? 0), 0),
       createdAt: Date.now(), manualEnding: false,
       schedulingMethod: null, requestedTime: null, committedQueue: [], scheduleUpdatedAt: null,
+      currentEntryId: null, currentEntryState: null, lastCompletedEntryId: null,
     };
     this.db.exec("BEGIN IMMEDIATE");
     try {
@@ -368,7 +389,7 @@ export class Store {
         marathon.completedEntries, marathon.failedEntries, marathon.totalEntries,
         marathon.totalRuntime, marathon.createdAt, Number(marathon.manualEnding),
       );
-      const put = this.db.prepare("INSERT INTO marathon_entries VALUES(?,?,?,?,?,?,?,?,?,?)");
+      const put = this.db.prepare("INSERT INTO marathon_entries(id,marathonId,position,sourceType,localIdentity,localPath,youtubeVideoId,title,duration,metadata) VALUES(?,?,?,?,?,?,?,?,?,?)");
       items.forEach((item, position) => put.run(
         randomUUID(), marathon.id, position, item.sourceType ?? "youtube",
         item.localIdentity ?? null, item.localPath ?? null,
@@ -391,7 +412,7 @@ export class Store {
     const row = this.db.prepare("SELECT * FROM marathons WHERE id=?").get(id) as any;
     if (!row) return null;
     const entries = (this.db.prepare("SELECT * FROM marathon_entries WHERE marathonId=? ORDER BY position").all(id) as any[])
-      .map((entry) => ({ ...entry, metadata: JSON.parse(entry.metadata) }));
+      .map((entry) => ({ ...entry, metadata: JSON.parse(entry.metadata), playbackState: entry.playbackState ?? "pending", startedAt: entry.startedAt ?? null, completedAt: entry.completedAt ?? null, lastError: entry.lastError ?? null }));
     return { marathon: { ...row, manualEnding: !!row.manualEnding, committedQueue: JSON.parse(row.committedQueue ?? "[]") }, entries };
   }
   scheduleMarathon(id: string, method: "start" | "end", requestedTime: number, calculatedStart: number, calculatedEnd: number, commitments: Array<{ entryId: string; title: string; remainingSeconds: number }>) {
@@ -414,6 +435,114 @@ export class Store {
   }
   completedQueueEntriesSince(timestamp: number) {
     return new Set((this.db.prepare("SELECT DISTINCT queueEntryId FROM playback_history WHERE endedAt>=? AND queueEntryId IS NOT NULL AND status IN ('played','skipped','failed')").all(timestamp) as any[]).map((row) => String(row.queueEntryId)));
+  }
+  recoverMarathonPlayback() {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.prepare("UPDATE marathon_entries SET playbackState='interrupted',lastError=COALESCE(lastError,'IdleCast restarted before this entry completed') WHERE playbackState IN ('preparing','playing') AND marathonId IN (SELECT id FROM marathons WHERE status IN ('scheduled','active'))").run();
+      this.db.prepare("UPDATE marathons SET currentEntryState='interrupted' WHERE status IN ('scheduled','active') AND currentEntryState IN ('preparing','playing')").run();
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  prepareMarathonEntry(marathonId: string, entryId: string, position: number, scheduleToken: number | null) {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const marathon = this.db.prepare("SELECT status,currentPosition,scheduleUpdatedAt FROM marathons WHERE id=?").get(marathonId) as any;
+      const entry = this.db.prepare("SELECT playbackState FROM marathon_entries WHERE id=? AND marathonId=? AND position=?").get(entryId, marathonId, position) as any;
+      if (!marathon || !entry || !["scheduled", "active"].includes(marathon.status) || marathon.currentPosition !== position || marathon.scheduleUpdatedAt !== scheduleToken || entry.playbackState === "completed")
+        throw new Error("Marathon entry ownership changed before preparation");
+      this.db.prepare("UPDATE marathons SET currentEntryId=?,currentEntryState='preparing' WHERE id=?").run(entryId, marathonId);
+      this.db.prepare("UPDATE marathon_entries SET playbackState='preparing',lastError=NULL WHERE id=? AND playbackState<>'completed'").run(entryId);
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  activateMarathonEntry(marathonId: string, entryId: string, position: number, scheduleToken: number | null) {
+    const now = Date.now();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const marathon = this.db.prepare("SELECT status,currentPosition,currentEntryId,scheduleUpdatedAt FROM marathons WHERE id=?").get(marathonId) as any;
+      const entry = this.db.prepare("SELECT playbackState FROM marathon_entries WHERE id=? AND marathonId=? AND position=?").get(entryId, marathonId, position) as any;
+      if (!marathon || !entry || !["scheduled", "active"].includes(marathon.status) || marathon.currentPosition !== position || marathon.currentEntryId !== entryId || marathon.scheduleUpdatedAt !== scheduleToken || entry.playbackState === "completed") {
+        this.db.exec("ROLLBACK");
+        return false;
+      }
+      this.db.prepare("UPDATE marathon_entries SET playbackState='playing',startedAt=COALESCE(startedAt,?),lastError=NULL WHERE id=?").run(now, entryId);
+      this.db.prepare("UPDATE marathons SET status='active',actualStart=COALESCE(actualStart,?),currentEntryState='playing' WHERE id=?").run(now, marathonId);
+      this.db.exec("COMMIT");
+      return true;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  interruptMarathonEntry(marathonId: string, entryId: string, message: string) {
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const owner = this.db.prepare("SELECT status,currentEntryId FROM marathons WHERE id=?").get(marathonId) as any;
+      if (!owner || !["scheduled", "active"].includes(owner.status) || owner.currentEntryId !== entryId) {
+        this.db.exec("ROLLBACK");
+        return false;
+      }
+      this.db.prepare("UPDATE marathon_entries SET playbackState='interrupted',lastError=? WHERE id=? AND marathonId=? AND playbackState<>'completed'").run(message.slice(0, 1000), entryId, marathonId);
+      this.db.prepare("UPDATE marathons SET currentEntryState='interrupted' WHERE id=? AND currentEntryId=?").run(marathonId, entryId);
+      this.db.exec("COMMIT");
+      return true;
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  completeMarathonEntry(marathonId: string, entryId: string, position: number) {
+    const now = Date.now();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const marathon = this.db.prepare("SELECT status,currentPosition,currentEntryId,totalEntries FROM marathons WHERE id=?").get(marathonId) as any;
+      const entry = this.db.prepare("SELECT playbackState FROM marathon_entries WHERE id=? AND marathonId=? AND position=?").get(entryId, marathonId, position) as any;
+      if (!marathon || !entry || marathon.status !== "active" || marathon.currentPosition !== position || marathon.currentEntryId !== entryId || entry.playbackState !== "playing") {
+        this.db.exec("ROLLBACK");
+        return { applied: false, finished: marathon?.status === "completed" };
+      }
+      const nextPosition = position + 1;
+      const finished = nextPosition >= marathon.totalEntries;
+      this.db.prepare("UPDATE marathon_entries SET playbackState='completed',completedAt=?,lastError=NULL WHERE id=? AND playbackState='playing'").run(now, entryId);
+      this.db.prepare("UPDATE marathons SET status=?,currentPosition=?,completedEntries=completedEntries+1,lastCompletedEntryId=?,currentEntryId=NULL,currentEntryState=NULL,actualEnd=? WHERE id=?").run(
+        finished ? "completed" : "active", nextPosition, entryId, finished ? now : null, marathonId,
+      );
+      this.db.exec("COMMIT");
+      return { applied: true, finished };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
+  skipMarathonEntry(marathonId: string, entryId: string, position: number) {
+    const now = Date.now();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const marathon = this.db.prepare("SELECT status,currentPosition,currentEntryId,totalEntries FROM marathons WHERE id=?").get(marathonId) as any;
+      const entry = this.db.prepare("SELECT playbackState FROM marathon_entries WHERE id=? AND marathonId=? AND position=?").get(entryId, marathonId, position) as any;
+      if (!marathon || !entry || marathon.status !== "active" || marathon.currentPosition !== position || marathon.currentEntryId !== entryId || entry.playbackState === "completed" || entry.playbackState === "skipped") {
+        this.db.exec("ROLLBACK");
+        return { applied: false, finished: marathon?.status === "completed" };
+      }
+      const nextPosition = position + 1;
+      const finished = nextPosition >= marathon.totalEntries;
+      this.db.prepare("UPDATE marathon_entries SET playbackState='skipped',completedAt=?,lastError='Skipped by user' WHERE id=?").run(now, entryId);
+      this.db.prepare("UPDATE marathons SET status=?,currentPosition=?,failedEntries=failedEntries+1,currentEntryId=NULL,currentEntryState=NULL,actualEnd=? WHERE id=?").run(
+        finished ? "completed" : "active", nextPosition, finished ? now : null, marathonId,
+      );
+      this.db.exec("COMMIT");
+      return { applied: true, finished };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
   recordDiagnostic(record: DiagnosticRecord) {
     const records = this.get<DiagnosticRecord[]>("diagnostics", []);
