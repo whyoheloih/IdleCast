@@ -33,6 +33,7 @@ import {
 import { playlistId as parsePlaylistId } from "./config.js";
 import { diagnosticForMessage, sanitizeDiagnosticRuntime } from "./diagnostics.js";
 import { LocalFolderPlaylistProvider, type KnownYouTubeMetadata } from "./local-media.js";
+import { EmergencyFallbackCatalog, createRecoveryIncident, type RecoveryIncident, type FallbackMedia } from "./fallback.js";
 import { overlay, overlayLayout } from "./overlay.js";
 import {
   audioSampleRate,
@@ -118,6 +119,9 @@ export class Engine extends EventEmitter {
   private metadataTimer: ReturnType<typeof setTimeout> | null = null;
   private marathonHandoffPending = false;
   private marathonHandoffReported = false;
+  readonly emergencyFallback: EmergencyFallbackCatalog;
+  private recoveryTask: Promise<void> | null = null;
+  private lastFallbackEmptyLog = 0;
   previewSource() {
     if (this.state !== "playing" || !this.currentMedia || !this.clip)
       return null;
@@ -147,6 +151,7 @@ export class Engine extends EventEmitter {
     this.playlist =
       dependencies.playlist ??
       new YouTubePlaylistProvider(config.YOUTUBE_API_KEY);
+    this.emergencyFallback = new EmergencyFallbackCatalog(store, config);
     try {
       const cache = path.join(config.DATA_DIR, "cache");
       for (const name of readdirSync(cache)) {
@@ -188,6 +193,199 @@ export class Engine extends EventEmitter {
         });
     }
     this.emit("change");
+  }
+  private recoveryIncident() {
+    return this.store.get<RecoveryIncident | null>("activeRecoveryIncident", null);
+  }
+
+  private saveRecoveryIncident(incident: RecoveryIncident | null) {
+    this.store.set("activeRecoveryIncident", incident);
+    this.event();
+  }
+
+  private recoverySnapshot() {
+    const incident = this.recoveryIncident();
+    return incident ? {
+      id: incident.id,
+      intendedEntryId: incident.intendedEntryId,
+      intendedTitle: incident.intendedTitle,
+      status: incident.status,
+      sourceType: incident.sourceType,
+      attempts: incident.attempts,
+      currentFallbackTitle: incident.currentFallbackId
+        ? this.emergencyFallback.snapshot().entries.find((entry) => entry.id === incident.currentFallbackId)?.title ?? null
+        : null,
+      consecutiveFallbackCount: incident.consecutiveFallbackCount,
+      lastError: incident.lastError,
+      startedAt: incident.startedAt,
+    } : null;
+  }
+
+  async rescanEmergencyFallbacks() {
+    const result = await this.emergencyFallback.scan(true);
+    if (!result.validCount)
+      this.event("Emergency Fallback folder is empty or has no valid media", "warn", { directory: result.directory, invalidCount: result.invalidCount });
+    else if (result.invalidCount)
+      this.event("Fallback media invalid; valid files remain available", "warn", { directory: result.directory, invalidCount: result.invalidCount });
+    else this.event(`Emergency Fallback catalog refreshed: ${result.validCount} valid video${result.validCount === 1 ? "" : "s"}`);
+    return result;
+  }
+
+  private registerDownloadAttempt(item: StoredItem) {
+    const ledger = this.store.get<Record<string, { attempts: number; lastAttemptAt: number }>>("recoveryAttemptLedger", {});
+    const prior = ledger[item.id]?.attempts ?? 0;
+    if (prior >= 20) throw new Error("Recovery attempt limit exhausted after 20 total download attempts");
+    const attempts = prior + 1;
+    const lastAttemptAt = Date.now();
+    ledger[item.id] = { attempts, lastAttemptAt };
+    this.store.set("recoveryAttemptLedger", ledger);
+    const incident = this.recoveryIncident();
+    if (incident?.intendedEntryId === item.id) {
+      incident.attempts = attempts;
+      incident.lastAttemptAt = lastAttemptAt;
+      incident.status = "recovering";
+      this.store.set("activeRecoveryIncident", incident);
+      this.event(`Intended video recovery attempt ${attempts}/20 started: ${item.title}`, "warn", { incidentId: incident.id, entryId: item.id, attempt: attempts });
+    }
+    return attempts;
+  }
+
+  private resolvedDownload(item: StoredItem) {
+    const incident = this.recoveryIncident();
+    if (incident?.intendedEntryId === item.id) return;
+    const ledger = this.store.get<Record<string, { attempts: number; lastAttemptAt: number }>>("recoveryAttemptLedger", {});
+    if (ledger[item.id]) {
+      delete ledger[item.id];
+      this.store.set("recoveryAttemptLedger", ledger);
+    }
+  }
+
+  private beginRecovery(item: StoredItem, ownership: RecoveryIncident["ownership"], failure: string, preparedKey: string, marathonId: string | null, marathonEntryId: string | null) {
+    const existing = this.recoveryIncident();
+    if (existing && existing.intendedEntryId === item.id && !["cancelled", "exhausted"].includes(existing.status)) {
+      existing.status = "recovering";
+      existing.completedAt = null;
+      existing.lastError = failure.slice(0, 1000);
+      this.saveRecoveryIncident(existing);
+      return existing;
+    }
+    const attempts = this.store.get<Record<string, { attempts: number }>>("recoveryAttemptLedger", {})[item.id]?.attempts ?? 0;
+    const incident = createRecoveryIncident(item, ownership, failure, attempts, preparedKey, marathonId, marathonEntryId);
+    this.saveRecoveryIncident(incident);
+    this.event(`Emergency Fallback activated for intended video: ${item.title} — ${failure}`, "warn", { incidentId: incident.id, entryId: item.id, marathonId });
+    return incident;
+  }
+
+  private archiveRecoveryIncident(incident: RecoveryIncident) {
+    const history = this.store.get<RecoveryIncident[]>("recoveryIncidentHistory", []);
+    history.unshift(incident);
+    this.store.set("recoveryIncidentHistory", history.slice(0, 100));
+    this.store.set("activeRecoveryIncident", null);
+  }
+
+  private scheduleRecovery(source: MediaSourceProvider, signal: AbortSignal) {
+    if (this.recoveryTask || signal.aborted) return;
+    const incident = this.recoveryIncident();
+    if (!incident || !["recovering", "paused"].includes(incident.status)) return;
+    if (incident.status === "paused" && incident.sourceType === "youtube") return;
+    this.recoveryTask = this.runRecovery(source, signal)
+      .catch(() => {})
+      .finally(() => { this.recoveryTask = null; });
+  }
+
+  private async runRecovery(source: MediaSourceProvider, signal: AbortSignal) {
+    while (!signal.aborted) {
+      const incident = this.recoveryIncident();
+      if (!incident || incident.status !== "recovering") return;
+      if (incident.sourceType === "youtube" && incident.attempts >= 20) {
+        incident.status = "exhausted";
+        incident.completedAt = Date.now();
+        incident.lastError = "Recovery attempt limit exhausted after 20 total download attempts";
+        this.saveRecoveryIncident(incident);
+        this.event(`Emergency recovery retry limit exhausted after 20 attempts: ${incident.intendedTitle}`, "error", { incidentId: incident.id, entryId: incident.intendedEntryId, attempts: incident.attempts });
+        return;
+      }
+      try {
+        if (incident.lastAttemptAt) {
+          const wait = incident.sourceType === "local" ? 30000 : Math.min(120000, backoff(Math.max(0, incident.attempts - 1)));
+          const remaining = incident.lastAttemptAt + wait - Date.now();
+          if (remaining > 0) await delay(remaining, signal);
+        }
+        const file = await source.resolve(incident.intendedItem, signal);
+        const info = await this.probeMedia(file, signal);
+        const size = (await stat(file)).size;
+        const latest = this.recoveryIncident();
+        if (!latest || latest.id !== incident.id || latest.status !== "recovering") return;
+        this.preparedMedia.set(latest.preparedKey, {
+          file, info, size,
+          owner: latest.ownership === "marathon" ? "marathon" : latest.ownership === "normal-handoff" ? "normal-handoff" : "normal",
+          logicalId: latest.intendedEntryId,
+          videoId: latest.intendedVideoId,
+        });
+        if (latest.sourceType === "youtube") this.cachedSizes.set(latest.intendedVideoId, size);
+        latest.status = "recovered";
+        latest.completedAt = Date.now();
+        latest.lastError = "";
+        if (latest.sourceType === "local")
+          this.event(`Local source reconnected; intended media is ready: ${latest.intendedTitle}`, "info", { incidentId: latest.id, entryId: latest.intendedEntryId });
+        this.saveRecoveryIncident(latest);
+        this.event(`Emergency recovery succeeded; intended media will resume after the current fallback: ${latest.intendedTitle}`, "info", { incidentId: latest.id, entryId: latest.intendedEntryId, attempts: latest.attempts });
+        return;
+      } catch (error) {
+        if (signal.aborted) return;
+        const latest = this.recoveryIncident();
+        if (!latest || latest.id !== incident.id) return;
+        const message = error instanceof Error ? error.message : "Recovery attempt failed";
+        latest.lastError = message.slice(0, 1000);
+        latest.lastAttemptAt = Date.now();
+        const unavailable = /private video|video unavailable|deleted video|copyright|not available in your country/i.test(message);
+        const userAction = /account verification|sign in|cookies|login required|rate limit/i.test(message);
+        const limit = /recovery attempt limit exhausted/i.test(message) || latest.attempts >= 20;
+        if (unavailable || limit) {
+          latest.status = "exhausted";
+          latest.completedAt = Date.now();
+          this.event(limit ? `Emergency recovery retry limit exhausted after ${latest.attempts} attempts: ${latest.intendedTitle}` : `Emergency recovery stopped for unavailable video: ${latest.intendedTitle}`, "error", { incidentId: latest.id, entryId: latest.intendedEntryId, attempts: latest.attempts });
+        } else if (userAction) {
+          latest.status = "paused";
+          this.event(`Emergency recovery paused; YouTube authentication or rate-limit attention is required: ${latest.intendedTitle} — ${message}`, "warn", { incidentId: latest.id, entryId: latest.intendedEntryId, attempts: latest.attempts });
+        } else {
+          this.event(`Emergency recovery attempt failed: ${latest.intendedTitle} — ${message}`, "warn", { incidentId: latest.id, entryId: latest.intendedEntryId, attempts: latest.attempts });
+        }
+        this.saveRecoveryIncident(latest);
+        if (latest.status !== "recovering") return;
+      }
+    }
+  }
+  private async abandonRecoveryIncident(incident: RecoveryIncident, reason: string, source: MediaSourceProvider) {
+    if (incident.ownership === "marathon" && incident.marathonId && incident.marathonEntryId) {
+      const record = this.store.marathon(incident.marathonId);
+      const entry = record?.entries.find((candidate) => candidate.id === incident.marathonEntryId);
+      if (entry) {
+        const result = this.store.failMarathonEntry(incident.marathonId, entry.id, entry.position, reason);
+        if (result.finished) {
+          this.marathonHandoffPending = true;
+          this.marathonHandoffReported = false;
+          this.ensureNormalHandoffPlan(incident.marathonId, this.store.all());
+        } else if (this.activeSource && this.controller && !this.controller.signal.aborted) {
+          this.scheduleOwnedRefill(this.activeSource, this.controller.signal);
+        }
+      }
+    } else {
+      this.store.fail(incident.intendedEntryId, reason);
+      if (incident.ownership === "normal-handoff") this.advanceNormalHandoff(incident.intendedEntryId);
+      const items = this.store.all();
+      const at = items.findIndex((candidate) => candidate.id === incident.intendedEntryId);
+      const next = items[(at + 1) % Math.max(1, items.length)];
+      this.store.set("cursor", next ? { id: next.id, offset: 0 } : null);
+    }
+    this.preparedMedia.delete(incident.preparedKey);
+    this.bufferedIds.delete(incident.intendedVideoId);
+    this.downloadStates.delete(incident.intendedVideoId);
+    this.cachedSizes.delete(incident.intendedVideoId);
+    if (incident.sourceType === "youtube") await source.remove?.(incident.intendedVideoId).catch(() => {});
+    incident.completedAt = Date.now();
+    this.archiveRecoveryIncident(incident);
+    this.event(`Emergency recovery incident closed; intended entry marked failed and programming will continue: ${incident.intendedTitle}`, "error", { incidentId: incident.id, entryId: incident.intendedEntryId, attempts: incident.attempts });
   }
   private downloadQueue() {
     const items = this.store.all();
@@ -252,6 +450,8 @@ export class Engine extends EventEmitter {
       bufferTarget: this.bufferTarget,
       downloadQueue: this.downloadQueue(),
       marathonSchedule: this.store.controllingMarathon()?.marathon ?? null,
+      recovery: this.recoverySnapshot(),
+      emergencyFallback: this.emergencyFallback.snapshot(),
     };
   }
   marathonHandoffConstraints() {
@@ -712,6 +912,8 @@ export class Engine extends EventEmitter {
               this.cachedSizes.delete(id);
               this.event("Cache deleted: " + filename);
             },
+            onAttempt: (item) => this.registerDownloadAttempt(item as StoredItem),
+            onResolved: (item) => this.resolvedDownload(item as StoredItem),
           }))
     );
   }
@@ -832,7 +1034,9 @@ export class Engine extends EventEmitter {
         if (signal.aborted) throw error;
         const message =
           error instanceof Error ? error.message : "Media download failed";
-        this.recordFailure(item, message);
+        // Keep the logical queue position eligible. If this entry reaches
+        // playback before background preparation succeeds, the play loop
+        // opens one durable recovery incident instead of silently skipping it.
         this.event(
           "Media failed while buffering: " +
             item.title +
@@ -1155,14 +1359,51 @@ export class Engine extends EventEmitter {
       const intended = this.marathonChoice(items);
       const handoffChoice = intended ? null : this.normalHandoffChoice(items);
       const selection = intended ?? handoffChoice;
-      const marathon = intended?.marathon ?? null;
-      const handoff = !!handoffChoice?.handoff;
+      let marathon = intended?.marathon ?? null;
+      let handoff = !!handoffChoice?.handoff;
       let index = selection?.index ?? Math.max(
         0,
         items.findIndex((i) => i.id === saved?.id),
       );
       let item: StoredItem | undefined = selection?.item ?? undefined;
-      if (selection?.blocked) {
+      let fallbackMedia: FallbackMedia | null = null;
+      let isFallback = false;
+      const recovery = this.recoveryIncident();
+      if (recovery?.status === "recovered") {
+        item = recovery.intendedItem;
+        index = Math.max(0, items.findIndex((candidate) => candidate.id === recovery.intendedEntryId));
+        handoff = recovery.ownership === "normal-handoff";
+      } else if (recovery && ["recovering", "paused", "exhausted"].includes(recovery.status)) {
+        this.scheduleRecovery(source, signal);
+        try { fallbackMedia = await this.emergencyFallback.choose(recovery.currentFallbackId); }
+        catch (error) {
+          this.event(`Fallback media invalid or folder unavailable — ${error instanceof Error ? error.message : "catalog scan failed"}`, "error", { incidentId: recovery.id });
+        }
+        if (!fallbackMedia) {
+          const ending = recovery.marathonId ? this.store.marathon(recovery.marathonId)?.marathon.status === "ending" : false;
+          if (recovery.status === "exhausted" || ending) {
+            if (ending) recovery.status = "cancelled";
+            await this.abandonRecoveryIncident(recovery, ending ? "Marathon ended early while the intended entry was unavailable" : recovery.lastError, source);
+            continue;
+          }
+          if (Date.now() - this.lastFallbackEmptyLog > 60000) {
+            this.lastFallbackEmptyLog = Date.now();
+            this.event("Emergency Fallback folder is empty; standby will hold output while intended media recovery continues", "warn", { incidentId: recovery.id, entryId: recovery.intendedEntryId });
+          }
+          this.state = "waiting";
+          this.current = null;
+          const idle = standby(this.config, s, epoch, signal, () => this.event("Emergency fallback standby encoder failed; retry scheduled", "error"));
+          try { await delay(30000, signal); } finally { await idle.stop(); }
+          continue;
+        }
+        isFallback = true;
+        item = this.emergencyFallback.fallbackItem(fallbackMedia);
+        marathon = null;
+        handoff = false;
+        recovery.currentFallbackId = fallbackMedia.id;
+        this.saveRecoveryIncident(recovery);
+      }
+      if (!isFallback && selection?.blocked) {
         this.state = "waiting";
         this.current = null;
         this.event(selection.blocked, selection.blockedLevel);
@@ -1263,7 +1504,6 @@ export class Engine extends EventEmitter {
       let historyId: number | null = null;
       let historyFinished = false;
       let playbackOffset = resume;
-      let sourceReady = false;
       let marathonActivated = false;
       let marathonOwnershipStale = false;
       const finishHistory = (
@@ -1317,7 +1557,7 @@ export class Engine extends EventEmitter {
           // request must never delay standby output during recovery.
           await writeLoadingItem(this.config, item).catch(() => {});
         }
-        const file = prepared?.file ?? (await source.resolve(item, clipSignal));
+        const file = prepared?.file ?? (isFallback && fallbackMedia ? fallbackMedia.path : await source.resolve(item, clipSignal));
         const info = prepared?.info ?? (await this.probeMedia(file, clipSignal));
         if (!prepared && (marathon || handoff)) {
           const size = (await stat(file)).size;
@@ -1336,7 +1576,6 @@ export class Engine extends EventEmitter {
             this.bufferedCount = this.bufferedIds.size;
           }
         }
-        sourceReady = true;
         const preparationMs = Date.now() - transitionStartedAt;
 
         if (preparationMs > 30000)
@@ -1420,12 +1659,12 @@ export class Engine extends EventEmitter {
         this.event(`Transition ${transition} activated ${item.videoId} (FFmpeg PID ${child.pid ?? "unknown"})`);
         this.currentMedia = { file, duration };
         this.state = "playing";
-        if (s.shuffle && shortStartsRemaining > 0) {
+        if (!isFallback && s.shuffle && shortStartsRemaining > 0) {
           const remaining = Math.max(0, shortStartsRemaining - 1);
           this.store.set("shuffleShortStartsRemaining", remaining);
           this.store.set("shuffleNeedsShortStart", remaining > 0);
         }
-        if (!marathon) {
+        if (!marathon && !isFallback) {
           this.store.set("lastVideoLong", isLongVideo(item));
           this.store.set("lastVideoDuration", item.duration);
           this.store.set("lastVideoSeries", item.seriesKey ?? "");
@@ -1481,14 +1720,21 @@ export class Engine extends EventEmitter {
                   const activatedAt = Date.now();
                   this.store.set("health.lastTransitionSuccess", { time: activatedAt, videoId: item!.videoId, title: item!.title, preparationMs });
                   this.store.set("health.lastPlaybackStart", { time: activatedAt, videoId: item!.videoId, title: item!.title, hasAudio, audioSampleRate: audio?.sample_rate ?? null, audioChannels: audio?.channels ?? null });
-                  historyId = this.store.startPlayback(item!);
+                  if (!isFallback) {
+                    historyId = this.store.startPlayback(item!);
+                    const recovered = this.recoveryIncident();
+                    if (recovered?.status === "recovered" && recovered.intendedEntryId === item!.id) {
+                      this.event(`Intended playback resumed after Emergency Fallback: ${item!.title}`, "info", { incidentId: recovered.id, entryId: recovered.intendedEntryId, attempts: recovered.attempts });
+                      this.archiveRecoveryIncident(recovered);
+                      const ledger = this.store.get<Record<string, { attempts: number; lastAttemptAt: number }>>("recoveryAttemptLedger", {});
+                      delete ledger[item!.id];
+                      this.store.set("recoveryAttemptLedger", ledger);
+                    }
+                    const counts = this.store.get<Record<string, number>>("playCounts", {});
+                    counts[item!.videoId] = (counts[item!.videoId] ?? 0) + 1;
+                    this.store.set("playCounts", counts);
+                  }
                   const generation = ++this.activationGeneration;
-                  const counts = this.store.get<Record<string, number>>(
-                    "playCounts",
-                    {},
-                  );
-                  counts[item!.videoId] = (counts[item!.videoId] ?? 0) + 1;
-                  this.store.set("playCounts", counts);
                   if (this.metadataTimer) clearTimeout(this.metadataTimer);
                   this.metadataTimer = setTimeout(() => {
                     if (
@@ -1571,7 +1817,25 @@ export class Engine extends EventEmitter {
           throw new Error(reason);
         }
         finishHistory("played");
-        if (marathon) {
+        if (isFallback && fallbackMedia) {
+          this.emergencyFallback.markPlayed(fallbackMedia.id);
+          const incident = this.recoveryIncident();
+          if (incident) {
+            incident.consecutiveFallbackCount += 1;
+            incident.currentFallbackId = fallbackMedia.id;
+            this.saveRecoveryIncident(incident);
+            const ending = incident.marathonId ? this.store.marathon(incident.marathonId)?.marathon.status === "ending" : false;
+            if (ending) {
+              incident.status = "cancelled";
+              await this.abandonRecoveryIncident(incident, "Marathon ended early while the intended entry was in recovery", source);
+            } else if (incident.status === "exhausted") {
+              await this.abandonRecoveryIncident(incident, incident.lastError || "Emergency recovery attempts exhausted", source);
+            } else {
+              this.event(`Emergency fallback completed; intended recovery remains ${incident.status}: ${fallbackMedia.title}`, "info", { incidentId: incident.id, fallbackId: fallbackMedia.id });
+            }
+          }
+          consumed = false;
+        } else if (marathon) {
           let completed;
           try {
             completed = this.store.completeMarathonEntry(marathon.id, marathon.entry.id, marathon.entry.position);
@@ -1609,7 +1873,11 @@ export class Engine extends EventEmitter {
         }
         if (this.skipRequested) {
           finishHistory("skipped");
-          if (marathon) {
+          if (isFallback && fallbackMedia) {
+            this.emergencyFallback.markPlayed(fallbackMedia.id);
+            this.event(`Emergency fallback skipped; intended entry remains preserved: ${fallbackMedia.title}`, "warn", { fallbackId: fallbackMedia.id });
+            consumed = false;
+          } else if (marathon) {
             let skipped;
             try {
               skipped = this.store.skipMarathonEntry(marathon.id, marathon.entry.id, marathon.entry.position);
@@ -1631,51 +1899,40 @@ export class Engine extends EventEmitter {
             consumed = true;
             this.event("Skipped: " + item.title);
           }
-        } else if (marathon) {
-          if (marathonOwnershipStale || /ownership changed before preparation/i.test(message)) {
-            this.event("Duplicate or stale Marathon activation suppressed", "warn", { marathonId: marathon.id, entryId: marathon.entry.id });
-            consumed = false;
-            this.state = "selecting";
-            continue;
-          }
+        } else if (isFallback && fallbackMedia) {
           finishHistory("failed");
           consumed = false;
-          try {
-            this.store.interruptMarathonEntry(marathon.id, marathon.entry.id, message);
-          } catch (error) {
-            this.event(`Marathon progress persistence failed while preserving the interrupted entry — ${error instanceof Error ? error.message : "unknown database error"}`, "error", { marathonId: marathon.id, entryId: marathon.entry.id });
-          }
-          const ending = this.store.marathon(marathon.id)?.marathon.status === "ending";
-          const marathonFailure = ending
-            ? "Current Marathon entry unavailable during Ending"
-            : /local media file missing|external drive disconnected|source mode .* does not match/i.test(message)
-              ? "Marathon entry unavailable"
-              : marathonActivated ? "Marathon playback interrupted" : "Marathon entry preparation failed";
-          this.event(`${marathonFailure}; position preserved: ${item.title} — ${message}`, "error", { marathonId: marathon.id, entryId: marathon.entry.id });
-          await delay(60000, signal).catch(() => {});
-        } else if (handoff) {
-          finishHistory("failed");
+          this.emergencyFallback.markInvalid(fallbackMedia.id, message);
+          this.event(`Fallback media invalid during playback: ${fallbackMedia.title} — ${message}`, "error", { fallbackId: fallbackMedia.id, incidentId: this.recoveryIncident()?.id });
+        } else if (marathon && (marathonOwnershipStale || /ownership changed before preparation/i.test(message))) {
+          this.event("Duplicate or stale Marathon activation suppressed", "warn", { marathonId: marathon.id, entryId: marathon.entry.id });
           consumed = false;
-          this.recordFailure(item, message);
-          this.event(`Normal handoff waiting for media: ${item.title} — ${message}`, "warn", { entryId: item.id });
-          await delay(60000, signal).catch(() => {});
+          this.state = "selecting";
+          continue;
         } else {
-          if (this.marathonHandoffPending && !this.marathonHandoffReported) {
-            this.marathonHandoffReported = true;
-            this.event(`Marathon-to-normal handoff failed: ${message}`, "error");
-          }
-          const pauseQueue = !sourceReady && pausesDownloadQueue(message);
           finishHistory("failed");
-          consumed = !pauseQueue;
-          this.recordFailure(item, message);
-          this.event("Media failed: " + item.title + " — " + message, "warn");
-          if (pauseQueue) {
-            this.event(
-              item.sourceType === "local" ? "Playback is holding this position for 60 seconds while the local folder or drive is unavailable" : "Playback is holding this position for 60 seconds so a global downloader problem does not cycle through every video",
-              "warn",
-            );
-            await delay(60000, signal).catch(() => {});
+          consumed = false;
+          const preparedKey = marathon ? item.id : item.videoId;
+          this.preparedMedia.delete(preparedKey);
+          if (item.sourceType !== "local") await source.remove?.(item.videoId).catch(() => {});
+          if (marathon) {
+            try { this.store.interruptMarathonEntry(marathon.id, marathon.entry.id, message); }
+            catch (persistenceError) { this.event(`Marathon progress persistence failed while starting recovery - ${persistenceError instanceof Error ? persistenceError.message : "unknown database error"}`, "error", { marathonId: marathon.id, entryId: marathon.entry.id }); }
           }
+          const priorIncident = this.recoveryIncident();
+          if (priorIncident?.intendedEntryId === item.id && priorIncident.status === "recovered")
+            this.event(`Fallback-to-intended handoff failed; recovery will continue: ${item.title} - ${message}`, "error", { incidentId: priorIncident.id, entryId: item.id });
+          const incident = this.beginRecovery(
+            item,
+            marathon ? "marathon" : handoff ? "normal-handoff" : "normal",
+            message,
+            preparedKey,
+            marathon?.id ?? null,
+            marathon?.entry.id ?? null,
+          );
+          this.scheduleRecovery(source, signal);
+          if (incident.sourceType === "local")
+            this.event(`Local source unavailable; Emergency Fallback will continue until the drive or file reconnects: ${item.title}`, "warn", { incidentId: incident.id, entryId: item.id });
         }
       } finally {
         finishHistory(signal.aborted ? "stopped" : "interrupted");

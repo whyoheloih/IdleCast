@@ -66,6 +66,29 @@ type Snapshot = {
   bufferedCount: number;
   bufferTarget: number;
   marathonSchedule: Marathon | null;
+  recovery: {
+    id: string;
+    intendedEntryId: string;
+    intendedTitle: string;
+    status: string;
+    sourceType: "youtube" | "local";
+    attempts: number;
+    currentFallbackTitle: string | null;
+    consecutiveFallbackCount: number;
+    lastError: string;
+    startedAt: number;
+  } | null;
+  emergencyFallback: {
+    directory: string;
+    available: boolean;
+    validCount: number;
+    invalidCount: number;
+    lastScan: number;
+    entries: Array<{
+      id: string; title: string; duration: number; available: boolean; compatible: boolean;
+      lastPlayedAt: number | null; playCount: number; error: string | null;
+    }>;
+  };
   downloadQueue: {
     totalBytes: number;
     active: Snapshot["download"];
@@ -553,6 +576,21 @@ function App() {
                 }
               />
             </div>
+            {state?.recovery && (
+              <section className="panel recovery-status-card">
+                <div>
+                  <span className="eyebrow">EMERGENCY FALLBACK ACTIVE</span>
+                  <h2>{state.recovery.intendedTitle}</h2>
+                  <p>The intended video keeps its place while IdleCast repairs it in the background.</p>
+                </div>
+                <div className="recovery-facts">
+                  <span><small>STATUS</small><b>{state.recovery.status}</b></span>
+                  <span><small>FALLBACK</small><b>{state.recovery.currentFallbackTitle ?? "Standby"}</b></span>
+                  <span><small>{state.recovery.sourceType === "youtube" ? "DOWNLOAD ATTEMPTS" : "SOURCE"}</small><b>{state.recovery.sourceType === "youtube" ? `${state.recovery.attempts} / 20` : "Local drive"}</b></span>
+                </div>
+                {state.recovery.lastError && <p className="recovery-error">{state.recovery.lastError}</p>}
+              </section>
+            )}
             {settings && <YouTubeViewer videoId={settings.youtubeWatchId} onSaved={id=>setSettings(s=>s?{...s,youtubeWatchId:id}:s)} />}
             <div className="overview-grid">
               <section className="panel playout">
@@ -1008,6 +1046,50 @@ function App() {
             )}
               </div>
             </div>
+            <section className="fallback-library">
+              <div className="panel-heading">
+                <div>
+                  <h2><Download size={18} /> Emergency Fallback Videos</h2>
+                  <p>Permanent local videos that keep the livestream moving while an intended video recovers.</p>
+                </div>
+                <span className={"badge " + (state?.emergencyFallback?.available ? "" : "warning-badge")}>
+                  {state?.emergencyFallback?.validCount ?? 0} READY
+                </span>
+              </div>
+              <div className="fallback-folder-row">
+                <div>
+                  <small>WINDOWS FOLDER</small>
+                  <code>{state?.emergencyFallback?.directory ?? "Loading..."}</code>
+                  <p>
+                    {state?.emergencyFallback?.invalidCount
+                      ? `${state.emergencyFallback.invalidCount} file(s) could not be validated.`
+                      : "IdleCast never deletes or changes files in this folder."}
+                  </p>
+                </div>
+                <div className="heading-actions">
+                  <button type="button" disabled={!!busy} onClick={() => void action("fallback-open", async () => {
+                    const result = await api("emergency-fallback/open", "POST");
+                    setNotice("Opened Emergency Fallback folder: " + result.directory);
+                  })}>Open Emergency Fallback Folder</button>
+                  <button type="button" disabled={!!busy} onClick={() => void action("fallback-rescan", async () => {
+                    await api("emergency-fallback/rescan", "POST");
+                    setNotice("Emergency Fallback videos rescanned.");
+                  })}><RefreshCw size={15} /> Refresh / Rescan</button>
+                </div>
+              </div>
+              {state?.emergencyFallback?.entries.length ? (
+                <div className="fallback-media-list">
+                  {state.emergencyFallback.entries.map((entry) => (
+                    <div className={"fallback-media-row " + (!entry.available || !entry.compatible ? "invalid" : "")} key={entry.id}>
+                      <div><b>{entry.title}</b><small>{time(entry.duration)} · {entry.playCount} fallback play{entry.playCount === 1 ? "" : "s"}</small></div>
+                      <span>{entry.available && entry.compatible ? "READY" : entry.error ?? "UNAVAILABLE"}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="empty fallback-empty"><Download size={24} /><p>Add a few playable MP4, MKV, WEBM, or MOV files to the folder, then rescan.</p></div>
+              )}
+            </section>
           </section>
         )}
         {page === "Settings" && settings && (

@@ -8,6 +8,8 @@ import {
 } from "node:crypto";
 import { promisify } from "node:util";
 import path from "node:path";
+import { mkdir } from "node:fs/promises";
+import { spawn } from "node:child_process";
 import { z } from "zod";
 import { shuffleOrderError } from "./queue.js";
 import type { Config } from "./config.js";
@@ -152,6 +154,21 @@ export function createApp(c: Config, store: Store, engine: Engine) {
     res.json({ ok: true });
   });
   app.get("/api/state", (_req, res) => res.json(engine.snapshot()));
+  app.get("/api/emergency-fallback", (_req, res) => res.json(engine.emergencyFallback.snapshot()));
+  app.post("/api/emergency-fallback/rescan", async (_req, res, next) => {
+    try { res.json(await engine.rescanEmergencyFallbacks()); }
+    catch (error) { next(error); }
+  });
+  app.post("/api/emergency-fallback/open", async (_req, res, next) => {
+    try {
+      const directory = engine.emergencyFallback.directory;
+      await mkdir(directory, { recursive: true });
+      const explorer = spawn("explorer.exe", [directory], { detached: true, stdio: "ignore", windowsHide: true });
+      explorer.unref();
+      res.json({ ok: true, directory });
+    } catch (error) { next(error); }
+  });
+
   app.put("/api/viewer", (req,res)=>{
     const parsed=z.object({youtubeWatchId:settingsSchema.shape.youtubeWatchId}).strict().safeParse(req.body);
     if(!parsed.success){res.status(400).json({error:"Enter a valid YouTube broadcast watch link or video ID"});return;}

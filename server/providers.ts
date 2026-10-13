@@ -49,9 +49,11 @@ export type DownloadActivity = {
 export type MediaSourceHooks = {
   onDownload?: (activity: DownloadActivity | null) => void;
   onDelete?: (filename: string) => void;
+  onAttempt?: (item: PlaylistItem) => number;
+  onResolved?: (item: PlaylistItem) => void;
 };
 export function isRetryableDownloadFailure(message: string) {
-  return !/account verification|rate limit|media disk is full|required media executable|executable path|cache limit exceeded|exceeds the configured per-video cache limit|cache storage is unavailable/i.test(
+  return !/account verification|rate limit|media disk is full|required media executable|executable path|cache limit exceeded|exceeds the configured per-video cache limit|cache storage is unavailable|recovery attempt limit exhausted/i.test(
     message,
   );
 }
@@ -286,11 +288,17 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
     const root = path.join(this.c.DATA_DIR, "cache");
     await mkdir(root, { recursive: true });
     const cached = await this.cachedFile(root, item.videoId);
-    if (cached) return cached;
+    if (cached) {
+      this.hooks.onResolved?.(item);
+      return cached;
+    }
     const existing = this.pending.get(item.videoId);
     if (existing) return withCancellation(existing, signal);
     this.hooks.onDownload?.(this.activity(item, "queued", 0, 0));
-    const task = this.queue.then(() => this.download(item, signal)).finally(() => this.pending.delete(item.videoId));
+    const task = this.queue
+      .then(() => this.download(item, signal))
+      .then((file) => { this.hooks.onResolved?.(item); return file; })
+      .finally(() => this.pending.delete(item.videoId));
     this.queue = task.catch(() => {});
     this.pending.set(item.videoId, task);
     return withCancellation(task, signal);
@@ -336,10 +344,11 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
     let usePublicClients = !this.c.YTDLP_COOKIES_FILE || this.cookiesRejected;
     let retryImmediately = false;
     for (let attempt = 1; attempt <= 3; attempt++) {
-      finalAttempt = attempt;
       signal.throwIfAborted();
+      const effectiveAttempt = this.hooks.onAttempt?.(item) ?? attempt;
+      finalAttempt = effectiveAttempt;
       if (attempt > 1) {
-        this.hooks.onDownload?.(this.activity(item, "retrying", 0, attempt));
+        this.hooks.onDownload?.(this.activity(item, "retrying", 0, effectiveAttempt));
         if (!retryImmediately)
           await delay(Math.min(15000, 3000 * attempt), signal);
         retryImmediately = false;
@@ -351,11 +360,11 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
           item,
           cacheLimit,
           perVideoLimit,
-          attempt,
+          effectiveAttempt,
           signal,
           usePublicClients,
         );
-        this.hooks.onDownload?.(this.activity(item, "downloaded", 100, attempt, { bytes: (await stat(file)).size }));
+        this.hooks.onDownload?.(this.activity(item, "downloaded", 100, effectiveAttempt, { bytes: (await stat(file)).size }));
         return file;
       } catch (error) {
         lastError = error;
@@ -405,6 +414,10 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
     let lastBytes = 0;
     let lastPercent = -1;
     this.hooks.onDownload?.(this.activity(item, "downloading", 0, attempt));
+    const publicClient = attempt % 3 === 0 ? "ios,web_embedded" : attempt % 2 === 0 ? "tv,web_embedded" : "android_vr,web_embedded";
+    const formatSelector = attempt % 4 === 0
+      ? "b[height<=" + this.quality.height + "]/bv*[height<=" + this.quality.height + "]+ba"
+      : "bv*[height<=" + this.quality.height + "]+ba/b[height<=" + this.quality.height + "]";
     await this.run(
       this.c.YTDLP_PATH,
       [
@@ -420,7 +433,7 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
            : usePublicClients
              ? [
                  "--extractor-args",
-                 "youtube:player_client=android_vr,web_embedded",
+                 "youtube:player_client=" + publicClient,
                ]
              : []
        ),
@@ -430,7 +443,7 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
        "--js-runtimes", "node:" + process.execPath, "--max-filesize", String(perVideoLimit),
        "--socket-timeout", "20", "--retries", "2", "--fragment-retries", "2",
        "--ffmpeg-location", this.c.FFMPEG_PATH, "--merge-output-format", "mp4",
-       "-f", "bv*[height<=" + this.quality.height + "]+ba/b[height<=" + this.quality.height + "]",
+       "-f", formatSelector,
        "-S", "res:" + this.quality.height + ",fps:" + this.quality.fps,
        "-o", path.join(root, this.cacheName(item.videoId) + ".%(ext)s"), "--",
        "https://www.youtube.com/watch?v=" + item.videoId],

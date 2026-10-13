@@ -592,6 +592,30 @@ export class Store {
       throw error;
     }
   }
+  failMarathonEntry(marathonId: string, entryId: string, position: number, message: string) {
+    const now = Date.now();
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      const marathon = this.db.prepare("SELECT status,currentPosition,currentEntryId,totalEntries FROM marathons WHERE id=?").get(marathonId) as any;
+      const entry = this.db.prepare("SELECT playbackState FROM marathon_entries WHERE id=? AND marathonId=? AND position=?").get(entryId, marathonId, position) as any;
+      if (!marathon || !entry || !["active", "ending"].includes(marathon.status) || marathon.currentPosition !== position || (marathon.currentEntryId && marathon.currentEntryId !== entryId) || entry.playbackState === "completed" || entry.playbackState === "failed") {
+        this.db.exec("ROLLBACK");
+        return { applied: false, finished: ["completed", "ended_early", "failed"].includes(marathon?.status) };
+      }
+      const nextPosition = position + 1;
+      const terminalStatus = marathon.status === "ending" ? "ended_early" : nextPosition >= marathon.totalEntries ? "failed" : "active";
+      const finished = terminalStatus !== "active";
+      this.db.prepare("UPDATE marathon_entries SET playbackState='failed',completedAt=?,lastError=? WHERE id=? AND playbackState<>'completed'").run(now, message.slice(0, 1000), entryId);
+      this.db.prepare("UPDATE marathons SET status=?,currentPosition=?,failedEntries=failedEntries+1,currentEntryId=NULL,currentEntryState=NULL,actualEnd=? WHERE id=?").run(
+        terminalStatus, nextPosition, finished ? now : null, marathonId,
+      );
+      this.db.exec("COMMIT");
+      return { applied: true, finished, endedEarly: terminalStatus === "ended_early" };
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
+  }
   recordDiagnostic(record: DiagnosticRecord) {
     const records = this.get<DiagnosticRecord[]>("diagnostics", []);
     records.unshift(record);
