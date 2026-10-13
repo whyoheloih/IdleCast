@@ -163,13 +163,13 @@ test("experimental adapter reports progress, retains five videos, deletes comple
         "4",
       );
       assert.equal(args[args.indexOf("--buffer-size") + 1], "1M");
-      onOutput?.("idlecast:37.5%\n");
+      onOutput?.("idlecast:37.5%\n", "stdout");
       const template = args[args.indexOf("-o") + 1];
       await writeFile(template.replace("%(ext)s", "mp4"), "test media bytes");
       active--;
       return "";
     },
-    { height: 720, fps: 30 },
+    { height: 720, fps: 30, bitrateKbps: 2500 },
     {
       onDownload: (activity) => {
         if (activity?.percent !== null && activity?.percent !== undefined)
@@ -259,12 +259,12 @@ test("download accounting excludes retained files and reserves half the cache pe
       const template = args[args.indexOf("-o") + 1];
       await writeFile(template.replace("%(ext)s", "part"), "1234567890");
       await check?.();
-      onOutput?.("idlecast:50%\n");
+      onOutput?.("idlecast:50%\n", "stdout");
       await rm(template.replace("%(ext)s", "part"), { force: true });
       await writeFile(template.replace("%(ext)s", "mp4"), "finished media");
       return "";
     },
-    { height: 720, fps: 30 },
+    { height: 720, fps: 30, bitrateKbps: 2500 },
     {
       onDownload: (activity) => {
         if (activity?.bytes !== undefined) bytes.push(activity.bytes);
