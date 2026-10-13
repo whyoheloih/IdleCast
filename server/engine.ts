@@ -255,7 +255,7 @@ export class Engine extends EventEmitter {
   private clearFallbackStreak(item: StoredItem) {
     const prior = this.fallbackStreak();
     const now = Date.now();
-    this.store.set<FallbackStreak>("fallbackStreak", {
+    this.store.set("fallbackStreak", {
       ...prior, count: 0, warningActive: false, warningReachedAt: null,
       lastActivationId: null, lastIntendedVideoId: item.videoId,
       lastIntendedTitle: item.title, lastIntendedStartedAt: now,
@@ -288,7 +288,7 @@ export class Engine extends EventEmitter {
     if (incident) {
       const streak = this.fallbackStreak();
       if (streak.count > 0)
-        this.store.set<FallbackStreak>("fallbackStreak", {
+        this.store.set("fallbackStreak", {
           ...streak,
           intendedEntryId: incident.intendedEntryId,
           intendedTitle: incident.intendedTitle,
@@ -381,7 +381,7 @@ export class Engine extends EventEmitter {
     this.store.set("recoveryIncidentHistory", history.slice(0, 100));
     const streak = this.fallbackStreak();
     if (streak.count > 0)
-      this.store.set<FallbackStreak>("fallbackStreak", {
+      this.store.set("fallbackStreak", {
         ...streak,
         intendedEntryId: incident.intendedEntryId,
         intendedTitle: incident.intendedTitle,
