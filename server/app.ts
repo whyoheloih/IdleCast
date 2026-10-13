@@ -22,6 +22,24 @@ import { OverlayPreview } from "./preview.js";
 import { credentialStore } from "./credentials.js";
 import { APP_VERSION } from "./version.js";
 import { currentSchedule, previewSchedule, scheduleConstraints, type ScheduleMethod } from "./marathon-schedule.js";
+async function openWindowsFolder(directory: string) {
+  if (process.platform !== "win32")
+    throw new Error("Opening media folders is currently available on Windows");
+
+  await new Promise<void>((resolve, reject) => {
+    const explorer = spawn("explorer.exe", [directory], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: false,
+    });
+    explorer.once("error", reject);
+    explorer.once("spawn", () => {
+      explorer.unref();
+      resolve();
+    });
+  });
+}
+
 const digest = (token: string) =>
   createHash("sha256").update(token).digest("hex");
 export function createApp(c: Config, store: Store, engine: Engine) {
@@ -164,8 +182,7 @@ export function createApp(c: Config, store: Store, engine: Engine) {
     try {
       const directory = engine.emergencyFallback.directory;
       await mkdir(directory, { recursive: true });
-      const explorer = spawn("explorer.exe", [directory], { detached: true, stdio: "ignore", windowsHide: true });
-      explorer.unref();
+      await openWindowsFolder(directory);
       res.json({ ok: true, directory });
     } catch (error) { next(error); }
   });
@@ -173,10 +190,7 @@ export function createApp(c: Config, store: Store, engine: Engine) {
     try {
       const directory = store.settings().localDirectory || c.LOCAL_MEDIA_DIR;
       await mkdir(directory, { recursive: true });
-      if (process.platform !== "win32")
-        throw new Error("Opening the local media folder is currently available on Windows");
-      const explorer = spawn("explorer.exe", [directory], { detached: true, stdio: "ignore", windowsHide: true });
-      explorer.unref();
+      await openWindowsFolder(directory);
       res.json({ ok: true, directory });
     } catch (error) { next(error); }
   });
