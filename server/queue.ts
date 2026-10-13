@@ -101,7 +101,7 @@ export function shuffleOrderError(items: PlaylistItem[]) {
   return null;
 }
 
-type SeriesMatch = { key: string; index: number };
+type SeriesMatch = { key: string; index: number; explicit?: boolean };
 
 const numberWords: Record<string, number> = {
   zero: 0, one: 1, two: 2, three: 3, four: 4, five: 5, six: 6, seven: 7,
@@ -133,13 +133,22 @@ export function detectSeries(
 ): SeriesMatch | null {
   if (mode === "off") return null;
 
-  // A final [number] is authoritative. For "episode title | series [7]",
-  // the stable series name is the final pipe segment, not the varying title.
+  // This is IdleCast's authoritative explicit series format:
+  // "video title | series name [episode number]". The varying video title
+  // never participates in the key, so every matching suffix groups together.
+  const explicit = title.match(
+    /\|\s*([^|]+?)\s*\[\s*(?:(?:episode|ep\.?)\s*)?#?\s*(\d{1,4})\s*\]\s*$/i,
+  );
+  if (explicit) {
+    const key = seriesKey(explicit[1]);
+    if (key.length >= 3)
+      return { key, index: Number(explicit[2]), explicit: true };
+  }
+
+  // Preserve the older bracket-only form for existing libraries.
   const bracket = title.match(/\[(\d{1,4})\]\s*$/);
   if (bracket && bracket.index !== undefined) {
-    const before = title.slice(0, bracket.index);
-    const pipe = before.lastIndexOf("|");
-    const key = seriesKey(pipe >= 0 ? before.slice(pipe + 1) : before);
+    const key = seriesKey(title.slice(0, bracket.index));
     if (key.length >= 3) return { key, index: Number(bracket[1]) };
   }
 
@@ -291,6 +300,7 @@ export function prepareQueue(
       ...item,
       seriesKey: series?.key ?? "",
       seriesIndex: series?.index ?? null,
+      _seriesExplicit: series?.explicit ?? false,
     };
   });
   const groups = new Map<string, Set<number>>();
@@ -301,7 +311,11 @@ export function prepareQueue(
       groups.set(item.seriesKey, indexes);
     }
   for (const item of detected)
-    if (item.seriesKey && (groups.get(item.seriesKey)?.size ?? 0) < 2) {
+    if (
+      item.seriesKey &&
+      !item._seriesExplicit &&
+      (groups.get(item.seriesKey)?.size ?? 0) < 2
+    ) {
       item.seriesKey = "";
       item.seriesIndex = null;
     }
@@ -408,7 +422,10 @@ export function prepareQueue(
 
   const flattened = blocks.flat();
   return {
-    items: flattened.map((item, position) => ({ ...item, position })),
+    items: flattened.map(({ _seriesExplicit: _ignored, ...item }, position) => ({
+      ...item,
+      position,
+    })),
     excluded: items.length - flattened.length,
     reasons,
     detectedSeries: new Set(
