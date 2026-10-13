@@ -59,7 +59,7 @@ export const DIAGNOSTIC_REGISTRY = {
   "IC-CACHE-002": d("IC-CACHE-002", "MEDIA_EXCEEDS_PER_VIDEO_LIMIT", "Media cache", "warning", "One video exceeded the per-video cache budget.", "Active media bytes exceed half of the configured total cache budget or yt-dlp reports max-filesize.", ["server/providers.ts"], ["video size", "quality setting", "cache budget"]),
   "IC-CACHE-003": d("IC-CACHE-003", "CACHE_DIRECTORY_UNAVAILABLE", "Media cache", "critical", "Idlecast cannot create, enumerate, or write the media cache directory.", "A cache filesystem operation fails for a reason other than a vanished temporary file.", ["server/providers.ts", "server/health.ts"], ["cache path", "drive state", "permissions"]),
   "IC-CACHE-004": d("IC-CACHE-004", "CACHE_CLEANUP_FAILED", "Media cache", "warning", "Idlecast could not remove an obsolete or failed cache file.", "A requested cache removal rejects.", ["server/providers.ts", "server/engine.ts"], ["locked file", "active FFmpeg handles", "permissions"]),
-  "IC-CACHE-005": d("IC-CACHE-005", "CACHED_MEDIA_VALIDATION_FAILED", "Media cache", "critical", "A downloaded or cached file failed FFprobe validation.", "Prepared media has no valid video stream or finite positive duration.", ["server/engine.ts"], ["cached file integrity", "incomplete download", "FFprobe output"]),
+  "IC-CACHE-005": d("IC-CACHE-005", "CACHED_MEDIA_VALIDATION_FAILED", "Media cache", "critical", "A downloaded or cached file failed FFprobe validation.", "The provider readiness gate or playback preparation finds no valid video stream or finite positive duration.", ["server/providers.ts", "server/engine.ts"], ["cached file integrity", "incomplete download", "FFprobe output"]),
   "IC-CACHE-006": d("IC-CACHE-006", "TEMPORARY_MEDIA_EXCESSIVE", "Media cache", "warning", "Incomplete temporary media occupies an excessive portion of the cache budget.", "Health inspection finds .part/.ytdl/.tmp files using more than 25 percent of CACHE_MAX_MB.", ["server/providers.ts", "server/health.ts"], ["interrupted downloads", "temporary fragments", "cache cleanup"]),
 
   "IC-FFMPEG-001": d("IC-FFMPEG-001", "FFMPEG_PROCESS_START_FAILED", "FFmpeg", "critical", "FFmpeg could not start.", "Spawning FFMPEG_PATH fails.", ["server/process.ts", "server/engine.ts", "server/encoder.ts"], ["FFMPEG_PATH", "packaged binary", "permissions"]),
@@ -249,6 +249,7 @@ const matchers: Array<[DiagnosticCode, RegExp]> = [
   ["IC-DL-013", /download failed after/i],
   ["IC-AUTH-002", /cookies rejected|account verification/i],
   ["IC-AUTH-003", /sign in|login required/i],
+  ["IC-CACHE-005", /downloaded media validation failed/i],
   ["IC-CACHE-001", /media cache limit exceeded/i],
   ["IC-CACHE-002", /per-video cache limit|max.filesize|file.*too large/i],
   ["IC-CACHE-003", /cache (?:directory|storage).*unavailable/i],

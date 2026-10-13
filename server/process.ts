@@ -8,6 +8,8 @@ export function mediaFailure(child: ChildProcess): string {
     return "YouTube JavaScript challenge solving failed";
   if (/requested format.*not available/i.test(text))
     return "YouTube requested format is not available";
+  if (/(?:audio|format 140|m4a).*(?:download|fragment|format).*(?:fail|error)|(?:fail|error).*audio (?:download|fragment|format)/i.test(text))
+    return "YouTube audio download failed";
   if (/fragment.*(?:retry|fail)|retry.*fragment/i.test(text))
     return "YouTube fragment retries exhausted";
   if (/merg|mux|postprocess/i.test(text))
@@ -85,7 +87,7 @@ export async function runCapture(
   signal: AbortSignal,
   timeout = 30000,
   check?: () => Promise<void>,
-  onOutput?: (chunk: string) => void,
+  onOutput?: (chunk: string, stream: "stdout" | "stderr") => void,
 ): Promise<string> {
   const bounded = new AbortController();
   const combined = AbortSignal.any([signal, bounded.signal]);
@@ -93,10 +95,10 @@ export async function runCapture(
   let output = "";
   let checking = false;
   let failureReason = "Media operation timed out";
-  child.stderr?.on("data", (chunk) => onOutput?.(String(chunk)));
+  child.stderr?.on("data", (chunk) => onOutput?.(String(chunk), "stderr"));
   child.stdout?.on("data", (chunk) => {
     const text = String(chunk);
-    onOutput?.(text);
+    onOutput?.(text, "stdout");
     // Keep captured output bounded without killing a healthy long-running
     // process. yt-dlp can emit more than 1 MiB of progress lines while a
     // multi-hour video downloads; callers that need those updates consume

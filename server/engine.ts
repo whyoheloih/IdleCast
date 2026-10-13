@@ -105,6 +105,7 @@ export class Engine extends EventEmitter {
   private bufferedIds = new Set<string>();
   private preparedMedia = new Map<string, PreparedMedia>();
   private downloadStates = new Map<string, DownloadActivity>();
+  private downloadJobPersistence = new Map<string, { at: number; signature: string }>();
   private cachedSizes = new Map<string, number>();
   private refillTask: Promise<void> | null = null;
   private ownedRefillPending = false;
@@ -172,6 +173,21 @@ export class Engine extends EventEmitter {
       )
         void this.sync().catch(() => {});
     }, 60000);
+  }
+  private persistDownloadJob(activity: DownloadActivity) {
+    const now = Date.now();
+    const signature = [activity.status, activity.phase, activity.attempt, activity.error ?? ""].join("|");
+    const previous = this.downloadJobPersistence.get(activity.videoId);
+    if (previous?.signature === signature && now - previous.at < 3000) return;
+    this.downloadJobPersistence.set(activity.videoId, { at: now, signature });
+    const jobs = this.store.get<Record<string, DownloadActivity>>("downloadJobs", {});
+    jobs[activity.videoId] = activity;
+    const retained = Object.fromEntries(
+      Object.entries(jobs)
+        .sort(([, left], [, right]) => (left.lastActivityAt ?? 0) - (right.lastActivityAt ?? 0))
+        .slice(-100),
+    );
+    this.store.set("downloadJobs", retained);
   }
   event(message?: string, level = "info", runtime: Record<string, unknown> = {}) {
     if (message) {
@@ -507,6 +523,14 @@ export class Engine extends EventEmitter {
         percent: activity?.percent ?? (prepared || this.cachedSizes.has(item.videoId) ? 100 : 0),
         attempt: activity?.attempt ?? 0,
         bytes: prepared?.size ?? activity?.bytes ?? this.cachedSizes.get(item.videoId) ?? 0,
+        phase: activity?.phase ?? (prepared || this.cachedSizes.has(item.videoId) ? "ready" : "queued"),
+        totalBytes: activity?.totalBytes ?? null,
+        speed: activity?.speed ?? null,
+        eta: activity?.eta ?? null,
+        fragmentIndex: activity?.fragmentIndex ?? null,
+        fragmentCount: activity?.fragmentCount ?? null,
+        lastActivityAt: activity?.lastActivityAt ?? null,
+        diagnosticCode: activity?.diagnosticCode,
         error: activity?.error ?? item.error,
       };
     }).sort((a, b) => Number(b.current) - Number(a.current) || a.position - b.position);
@@ -977,24 +1001,29 @@ export class Engine extends EventEmitter {
         ? new LocalMediaSource(s.localDirectory)
         : new ExperimentalYouTubeSource(this.config, undefined, s, {
             onDownload: (download) => {
-              this.download = download;
-              if (download) {
-                this.downloadStates.set(download.videoId, download);
-                if (download.status === "downloaded") {
-                  this.store.set("health.lastDownloadSuccess", { time: Date.now(), videoId: download.videoId, title: download.title });
+              const enriched = download?.error
+                ? { ...download, diagnosticCode: diagnosticForMessage(download.error) ?? undefined }
+                : download;
+              this.download = enriched;
+              if (enriched) {
+                this.downloadStates.set(enriched.videoId, enriched);
+                this.persistDownloadJob(enriched);
+                if (enriched.status === "downloaded") {
+                  this.store.set("health.lastDownloadSuccess", { time: Date.now(), videoId: enriched.videoId, title: enriched.title });
                   this.store.set("health.consecutiveDownloadFailures", 0);
-                } else if (download.status === "failed") {
-                  this.store.set("health.lastDownloadFailure", { time: Date.now(), videoId: download.videoId, title: download.title, error: download.error, attempt: download.attempt });
+                } else if (enriched.status === "failed") {
+                  this.store.set("health.lastDownloadFailure", { time: Date.now(), videoId: enriched.videoId, title: enriched.title, error: enriched.error, attempt: enriched.attempt, diagnosticCode: enriched.diagnosticCode });
                   this.store.set("health.consecutiveDownloadFailures", this.store.get("health.consecutiveDownloadFailures", 0) + 1);
                 }
               }
               void writeLoadingStatus(
                 this.config,
-                download,
+                enriched,
               ).catch(() => {});
               if (download?.status === "retrying")
                 this.event(
-                  "Retrying download (attempt " + download.attempt + "/3): " + download.title,
+                  "Retrying download (attempt " + download.attempt + "/3): " + download.title +
+                    (download.error ? " — previous failure: " + download.error : ""),
                   "warn",
                 );
               else if (download?.status === "failed")

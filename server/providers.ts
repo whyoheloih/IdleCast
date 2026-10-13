@@ -44,6 +44,14 @@ export type DownloadActivity = {
   status: "queued" | "downloading" | "retrying" | "downloaded" | "failed";
   attempt: number;
   bytes?: number;
+  phase?: "queued" | "resolving" | "downloading" | "postprocessing" | "validating" | "ready" | "retrying" | "failed";
+  totalBytes?: number | null;
+  speed?: number | null;
+  eta?: number | null;
+  fragmentIndex?: number | null;
+  fragmentCount?: number | null;
+  lastActivityAt?: number;
+  diagnosticCode?: string;
   error?: string;
 };
 export type MediaSourceHooks = {
@@ -305,7 +313,8 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
   }
   async close() { this.lifetime.abort(); await this.queue; }
   private activity(item: PlaylistItem, status: DownloadActivity["status"], percent: number | null, attempt: number, extra: Partial<DownloadActivity> = {}): DownloadActivity {
-    return { videoId: item.videoId, title: item.title, thumbnail: item.thumbnail, percent, status, attempt, ...extra };
+    const defaultPhase: DownloadActivity["phase"] = status === "downloaded" ? "ready" : status === "failed" ? "failed" : status;
+    return { videoId: item.videoId, title: item.title, thumbnail: item.thumbnail, percent, status, attempt, phase: defaultPhase, lastActivityAt: Date.now(), ...extra };
   }
   private cacheName(id: string) { return id + "." + this.quality.height + "p" + this.quality.fps; }
   private async cachedFile(root: string, id: string) {
@@ -348,7 +357,9 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
       const effectiveAttempt = this.hooks.onAttempt?.(item) ?? attempt;
       finalAttempt = effectiveAttempt;
       if (attempt > 1) {
-        this.hooks.onDownload?.(this.activity(item, "retrying", 0, effectiveAttempt));
+        this.hooks.onDownload?.(this.activity(item, "retrying", 0, effectiveAttempt, {
+          error: lastError instanceof Error ? lastError.message : undefined,
+        }));
         if (!retryImmediately)
           await delay(Math.min(15000, 3000 * attempt), signal);
         retryImmediately = false;
@@ -413,7 +424,7 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
     let lastProgress = Date.now();
     let lastBytes = 0;
     let lastPercent = -1;
-    this.hooks.onDownload?.(this.activity(item, "downloading", 0, attempt));
+    this.hooks.onDownload?.(this.activity(item, "downloading", 0, attempt, { phase: "resolving" }));
     const publicClient = attempt % 3 === 0 ? "ios,web_embedded" : attempt % 2 === 0 ? "tv,web_embedded" : "android_vr,web_embedded";
     const formatSelector = attempt % 4 === 0
       ? "b[height<=" + this.quality.height + "]/bv*[height<=" + this.quality.height + "]+ba"
@@ -438,7 +449,9 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
              : []
        ),
        "--no-playlist", "--newline", "--progress", "--no-color",
-       "--progress-template", "download:idlecast:%(progress._percent_str)s", "--no-cache-dir",
+       "--progress-template", "download:idlecast-progress:%(progress)j",
+       "--progress-template", "postprocess:idlecast-postprocess:%(progress)j",
+       "--print", "after_move:idlecast-complete:%(filepath)j", "--no-cache-dir",
        "--concurrent-fragments", "4", "--buffer-size", "1M", "--no-resize-buffer",
        "--js-runtimes", "node:" + process.execPath, "--max-filesize", String(perVideoLimit),
        "--socket-timeout", "20", "--retries", "2", "--fragment-retries", "2",
@@ -467,20 +480,69 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
         if (requestedBytes > lastBytes) {
           lastBytes = requestedBytes;
           lastProgress = Date.now();
-          this.hooks.onDownload?.(this.activity(item, "downloading", null, attempt, { bytes: requestedBytes }));
+          this.hooks.onDownload?.(this.activity(item, "downloading", lastPercent >= 0 ? lastPercent : null, attempt, {
+            phase: "downloading", bytes: requestedBytes,
+          }));
         }
         if (Date.now() - lastProgress > 600000) throw new Error("Download stalled with no meaningful progress for 10 minutes");
       },
-      (chunk) => {
-        for (const match of chunk.matchAll(/idlecast:\s*([0-9.]+)%/g)) {
-          const percent = Number(match[1]);
+      (() => {
+        const buffers: Record<"stdout" | "stderr", string> = { stdout: "", stderr: "" };
+        const numeric = (value: unknown): number | null => {
+          if (value === null || value === undefined || String(value).trim() === "") return null;
+          const parsed = typeof value === "number" ? value : Number(value);
+          return Number.isFinite(parsed) ? parsed : null;
+        };
+        const emitProgress = (record: Record<string, unknown>) => {
+          const downloaded = numeric(record.downloaded_bytes) ?? lastBytes;
+          const total = numeric(record.total_bytes) ?? numeric(record.total_bytes_estimate);
+          const rawPercent = numeric(String(record._percent_str ?? "").replace("%", ""));
+          const percent = rawPercent ?? (total && downloaded >= 0 ? downloaded / total * 100 : null);
+          const fragmentIndex = numeric(record.fragment_index);
+          const fragmentCount = numeric(record.fragment_count);
+          if (downloaded > lastBytes || (percent !== null && percent > lastPercent) || fragmentIndex !== null)
+            lastProgress = Date.now();
+          lastBytes = Math.max(lastBytes, downloaded);
+          if (percent !== null) lastPercent = Math.max(lastPercent, percent);
+          const displayPercent = lastPercent < 0 ? null : Math.max(0, Math.min(100, lastPercent));
+          this.hooks.onDownload?.(this.activity(item, "downloading", displayPercent, attempt, {
+            phase: "downloading", bytes: lastBytes, totalBytes: total,
+            speed: numeric(record.speed), eta: numeric(record.eta), fragmentIndex, fragmentCount,
+          }));
+        };
+        const consumeLine = (value: string) => {
+          if (value.startsWith("idlecast-progress:")) {
+            try { emitProgress(JSON.parse(value.slice("idlecast-progress:".length))); } catch {}
+            return;
+          }
+          if (value.startsWith("idlecast-postprocess:")) {
+            lastProgress = Date.now();
+            this.hooks.onDownload?.(this.activity(item, "downloading", 100, attempt, { phase: "postprocessing", bytes: lastBytes }));
+            return;
+          }
+          if (value.startsWith("idlecast-complete:")) {
+            lastProgress = Date.now();
+            this.hooks.onDownload?.(this.activity(item, "downloading", 100, attempt, { phase: "validating", bytes: lastBytes }));
+            return;
+          }
+          // Compatibility fallback for older yt-dlp builds.
+          const match = value.match(/idlecast:\s*([0-9.]+)%/);
+          const percent = match ? Number(match[1]) : NaN;
           if (Number.isFinite(percent) && percent > lastPercent) {
             lastPercent = percent;
             lastProgress = Date.now();
-            this.hooks.onDownload?.(this.activity(item, "downloading", Math.max(0, Math.min(100, percent)), attempt, { bytes: lastBytes }));
+            this.hooks.onDownload?.(this.activity(item, "downloading", Math.max(0, Math.min(100, percent)), attempt, {
+              phase: "downloading", bytes: lastBytes,
+            }));
           }
-        }
-      },
+        };
+        return (chunk: string, stream: "stdout" | "stderr") => {
+          buffers[stream] += chunk;
+          const lines = buffers[stream].split(/\r?\n/);
+          buffers[stream] = lines.pop() ?? "";
+          for (const line of lines) consumeLine(line.trim());
+        };
+      })(),
     );
     const file = await this.cachedFile(root, item.videoId);
     if (!file) throw new Error("Download produced no merged media; check FFmpeg location and cache limit");
@@ -488,6 +550,25 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
       await this.removeCached(root, path.basename(file));
       throw new Error("Video exceeds the configured per-video cache limit");
     }
+    this.hooks.onDownload?.(this.activity(item, "downloading", 100, attempt, {
+      phase: "validating", bytes: (await stat(file)).size,
+    }));
+    let probe: any;
+    try {
+      probe = JSON.parse(await this.run(
+        this.c.FFPROBE_PATH,
+        ["-v", "error", "-show_entries", "stream=codec_type:format=duration", "-of", "json", file],
+        signal,
+        60000,
+      ));
+    } catch (error) {
+      throw new Error(`Downloaded media validation failed: ${error instanceof Error ? error.message : "FFprobe could not validate the file"}`);
+    }
+    if (!probe.streams?.some((stream: any) => stream.codec_type === "video"))
+      throw new Error("Downloaded media validation failed: no playable video stream");
+    const duration = Number(probe.format?.duration);
+    if (!Number.isFinite(duration) || duration <= 0)
+      throw new Error("Downloaded media validation failed: media duration is invalid");
     return file;
   }
 }

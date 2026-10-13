@@ -64,6 +64,18 @@ type Snapshot = {
     title: string;
     thumbnail: string;
     percent: number | null;
+    status: string;
+    phase?: string;
+    attempt: number;
+    bytes?: number;
+    totalBytes?: number | null;
+    speed?: number | null;
+    eta?: number | null;
+    fragmentIndex?: number | null;
+    fragmentCount?: number | null;
+    lastActivityAt?: number;
+    diagnosticCode?: string;
+    error?: string;
   } | null;
   bufferedCount: number;
   bufferTarget: number;
@@ -122,6 +134,14 @@ type Snapshot = {
       percent: number | null;
       attempt: number;
       bytes: number;
+      phase?: string;
+      totalBytes?: number | null;
+      speed?: number | null;
+      eta?: number | null;
+      fragmentIndex?: number | null;
+      fragmentCount?: number | null;
+      lastActivityAt?: number | null;
+      diagnosticCode?: string;
       error?: string | null;
     }>;
   };
@@ -1096,11 +1116,24 @@ function App() {
                         {entry.bytes ? (entry.bytes / 1048576).toFixed(1) + " MB" : "Size pending"}
                       </small>
                       {(entry.status === "downloading" || entry.status === "retrying" || entry.status === "queued") && (
-                        <progress max={100} value={entry.percent ?? 0} />
+                        <>
+                          <progress max={100} value={entry.percent ?? 0} />
+                          <small className="download-telemetry">
+                            {(entry.phase ?? entry.status).replace("-", " ")}
+                            {entry.speed ? " · " + (entry.speed / 1048576).toFixed(1) + " MB/s" : ""}
+                            {entry.eta !== null && entry.eta !== undefined ? " · " + Math.ceil(entry.eta) + "s remaining" : ""}
+                            {entry.fragmentIndex && entry.fragmentCount ? " · fragment " + entry.fragmentIndex + "/" + entry.fragmentCount : ""}
+                          </small>
+                        </>
+                      )}
+                      {entry.error && (
+                        <small className="download-error">
+                          {entry.diagnosticCode ? entry.diagnosticCode + " · " : ""}{entry.error}
+                        </small>
                       )}
                     </div>
                     <span className={"queue-status status-" + entry.status.toLocaleLowerCase()}>
-                      {entry.status}
+                      {(entry.phase ?? entry.status).replace("-", " ")}
                       {entry.attempt > 1 ? " · attempt " + entry.attempt : ""}
                     </span>
                   </div>
