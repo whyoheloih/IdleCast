@@ -3,6 +3,16 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.5.1",
+    date: "Oct 13, 2026",
+    title: "Marathon source editor repair",
+    items: [
+      "The Marathon Play YouTube source field now keeps empty, partial, and unsaved text while editing",
+      "Background state refreshes and stale save responses no longer restore an older playlist or channel URL",
+      "YouTube Marathon sources change only after an explicit Save & sync action succeeds",
+    ],
+  },
+  {
     version: "1.5.0",
     date: "Oct 13, 2026",
     title: "Marathon, local media, fallback, and storage integration",
