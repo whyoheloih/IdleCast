@@ -13,7 +13,7 @@ console.log(`Writing Windows applications to ${output}`);
 const cli = path.resolve("node_modules", "electron-builder", "out", "cli", "cli.js");
 const result = spawnSync(
   process.execPath,
-  [cli, "--win", "--x64", `--config.directories.output=${output}`],
+  [cli, "--win", "--x64", "--publish", "never", `--config.directories.output=${output}`],
   { stdio: "inherit" },
 );
 if (result.error) throw result.error;
