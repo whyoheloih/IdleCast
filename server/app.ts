@@ -169,6 +169,17 @@ export function createApp(c: Config, store: Store, engine: Engine) {
       res.json({ ok: true, directory });
     } catch (error) { next(error); }
   });
+  app.post("/api/local-media/open", async (_req, res, next) => {
+    try {
+      const directory = store.settings().localDirectory || c.LOCAL_MEDIA_DIR;
+      await mkdir(directory, { recursive: true });
+      if (process.platform !== "win32")
+        throw new Error("Opening the local media folder is currently available on Windows");
+      const explorer = spawn("explorer.exe", [directory], { detached: true, stdio: "ignore", windowsHide: true });
+      explorer.unref();
+      res.json({ ok: true, directory });
+    } catch (error) { next(error); }
+  });
 
   app.put("/api/viewer", (req,res)=>{
     const parsed=z.object({youtubeWatchId:settingsSchema.shape.youtubeWatchId}).strict().safeParse(req.body);
@@ -278,6 +289,7 @@ export function createApp(c: Config, store: Store, engine: Engine) {
         youtube: !!c.YOUTUBE_STREAM_KEY,
         twitch: !!c.TWITCH_STREAM_KEY,
         experimental: c.EXPERIMENTAL_YOUTUBE,
+        storage: { normal: c.NORMAL_CACHE_DIR, marathon: c.MARATHON_CACHE_DIR, fallback: c.FALLBACK_MEDIA_DIR, localDefault: c.LOCAL_MEDIA_DIR },
       },
     }),
   );

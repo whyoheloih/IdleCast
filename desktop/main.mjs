@@ -89,11 +89,11 @@ function packagedResource(...parts) {
 function findLegacyRuntime() {
   const requested = process.env.IDLECAST_HOME;
   if (requested && existsSync(path.join(requested, ".env"))) return requested;
+  const sourceRuntime = "C:\\Users\\ejbot\\Documents\\Codex\\2026-09-12\\idlecast\\repo";
+  if (process.platform === "win32" && existsSync(path.join(sourceRuntime, ".env")))
+    return sourceRuntime;
   const eDriveRuntime = "E:\\IdleCast\\repo";
-  if (
-    process.platform === "win32" &&
-    existsSync(path.join(eDriveRuntime, ".env"))
-  )
+  if (process.platform === "win32" && existsSync(path.join(eDriveRuntime, ".env")))
     return eDriveRuntime;
   if (!app.isPackaged && existsSync(path.join(PROJECT_ROOT, ".env")))
     return PROJECT_ROOT;
@@ -120,6 +120,10 @@ function ensureDesktopRuntime() {
         "PORT=3000",
         "DATA_DIR=./data",
         "MEDIA_DIR=./media",
+        "NORMAL_CACHE_DIR=E:\\ejbot\\Documents\\Idle Cast\\Idle Cast Shuffle Queue",
+        "MARATHON_CACHE_DIR=E:\\ejbot\\Documents\\Idle Cast\\Idle Cast Marathon Play",
+        "FALLBACK_MEDIA_DIR=E:\\ejbot\\Documents\\Idle Cast\\Idle Cast Emergency Fallback Local Videos",
+        "LOCAL_MEDIA_DIR=E:\\ejbot\\Documents\\Idle Cast\\Idle Cast Local Only Mode",
         "CACHE_MAX_MB=25600",
         "UDP_BASE_PORT=19000",
         "",

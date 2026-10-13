@@ -19,6 +19,9 @@ const bool = z
   .default("false")
   .transform((v) => v === "true");
 const secret = z.string().min(16).max(256);
+export const DEFAULT_LOCAL_MEDIA_DIR = process.platform === "win32"
+  ? "E:\\ejbot\\Documents\\Idle Cast\\Idle Cast Local Only Mode"
+  : "";
 export function playlistId(value: string): string {
   if (!value) return "";
   if (/^[A-Za-z0-9_-]{1,100}$/.test(value)) return value;
@@ -49,6 +52,10 @@ export const envSchema = z.object({
   ADMIN_PASSWORD: secret,
   DATA_DIR: z.string().default("./data"),
   MEDIA_DIR: z.string().default("./media"),
+  NORMAL_CACHE_DIR: z.string().default(""),
+  MARATHON_CACHE_DIR: z.string().default(""),
+  FALLBACK_MEDIA_DIR: z.string().default(""),
+  LOCAL_MEDIA_DIR: z.string().default(""),
   YOUTUBE_API_KEY: z.string().default(""),
   YOUTUBE_STREAM_KEY: z.string().default(""),
   TWITCH_STREAM_KEY: z.string().default(""),
@@ -90,6 +97,13 @@ export function readConfig(env: NodeJS.ProcessEnv): Config {
     throw new Error("Remote access requires HTTPS and COOKIE_SECURE=true");
   c.DATA_DIR = path.resolve(c.DATA_DIR);
   c.MEDIA_DIR = path.resolve(c.MEDIA_DIR);
+  const defaultMediaRoot = process.platform === "win32"
+    ? "E:\\ejbot\\Documents\\Idle Cast"
+    : path.join(c.DATA_DIR, "media-storage");
+  c.NORMAL_CACHE_DIR = path.resolve(c.NORMAL_CACHE_DIR || path.join(defaultMediaRoot, "Idle Cast Shuffle Queue"));
+  c.MARATHON_CACHE_DIR = path.resolve(c.MARATHON_CACHE_DIR || path.join(defaultMediaRoot, "Idle Cast Marathon Play"));
+  c.FALLBACK_MEDIA_DIR = path.resolve(c.FALLBACK_MEDIA_DIR || path.join(defaultMediaRoot, "Idle Cast Emergency Fallback Local Videos"));
+  c.LOCAL_MEDIA_DIR = path.resolve(c.LOCAL_MEDIA_DIR || path.join(defaultMediaRoot, "Idle Cast Local Only Mode"));
   c.FFMPEG_PATH = executablePath(c.FFMPEG_PATH);
   c.FFPROBE_PATH = executablePath(c.FFPROBE_PATH);
   c.YTDLP_PATH = executablePath(c.YTDLP_PATH);
@@ -248,7 +262,8 @@ export const settingsSchema = z
     mediaSource: z
       .enum(["local", "youtube-experimental"])
       .default("youtube-experimental"),
-    localDirectory: z.string().trim().max(32767).default(""),
+    localDirectory: z.string().trim().max(32767).default(DEFAULT_LOCAL_MEDIA_DIR)
+      .transform((value) => value || DEFAULT_LOCAL_MEDIA_DIR),
     resyncMinutes: z.number().int().min(5).max(1440).default(15),
     width: z.union([z.literal(1280), z.literal(1920)]).default(1280),
     height: z.union([z.literal(720), z.literal(1080)]).default(720),

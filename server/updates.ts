@@ -1,14 +1,26 @@
 export const updateCommand =
-  "Set-Location 'E:\\IdleCast\\repo'; & 'C:\\Users\\ejbot\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\native\\git\\cmd\\git.exe' pull --ff-only; & 'C:\\Users\\ejbot\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\bin\\fallback\\pnpm.cmd' install --frozen-lockfile; & 'C:\\Users\\ejbot\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\bin\\fallback\\pnpm.cmd' build; & 'C:\\Users\\ejbot\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\bin\\fallback\\pnpm.cmd' start";
+  "Set-Location 'C:\\Users\\ejbot\\Documents\\Codex\\2026-09-12\\idlecast\\repo'; & 'C:\\Users\\ejbot\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\native\\git\\cmd\\git.exe' pull --ff-only; & 'C:\\Users\\ejbot\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\bin\\fallback\\pnpm.cmd' install --frozen-lockfile; & 'C:\\Users\\ejbot\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\bin\\fallback\\pnpm.cmd' build; & 'C:\\Users\\ejbot\\.cache\\codex-runtimes\\codex-primary-runtime\\dependencies\\bin\\fallback\\pnpm.cmd' start";
 
 export const updateHistory = [
+  {
+    version: "Unreleased",
+    date: "Oct 13, 2026",
+    title: "E-drive media storage and integration repair",
+    items: [
+      "Normal and Marathon managed downloads use separate E-drive directories while sharing one 25 GB cache budget",
+      "yt-dlp partial files and merge preparation stay on the selected destination drive",
+      "Health reports the actual media destination and reports legacy C-drive cache files without deleting them",
+      "Local Files Only and Emergency Fallback folders open directly from their existing dashboard controls",
+      "The development command refreshes the current frontend bundle before starting localhost:3000",
+    ],
+  },
   {
     version: "1.4.3",
     date: "Oct 4, 2026",
     title: "Health dashboard and precise diagnostics",
     items: [
       "A dedicated Health page reports overall and per-system status from live evidence, recent successes, and specific failures",
-      "Sixty-seven stable diagnostic codes identify exact observable failures across downloads, cache, playback, transitions, output, API, authentication, database, playlist, and system components",
+      "Stable diagnostic codes identify exact observable failures across downloads, cache, playback, transitions, output, API, authentication, database, playlist, and system components",
       "Expandable Health details explain each status and provide a sanitized Copy Diagnostic for Codex report",
       "Diagnostic definitions and Codex investigation rules are documented as a permanent debugging API",
       "A dedicated Errors tab lists every retained warning and critical occurrence with its exact IC code, detection rule, source components, and sanitized runtime evidence",

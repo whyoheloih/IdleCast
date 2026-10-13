@@ -68,7 +68,7 @@ export class EmergencyFallbackCatalog {
   readonly directory: string;
   private lastScan = 0;
   constructor(private store: Store, private config: Config) {
-    this.directory = path.join(config.DATA_DIR, "emergency-fallback");
+    this.directory = config.FALLBACK_MEDIA_DIR;
   }
 
   private saved() {

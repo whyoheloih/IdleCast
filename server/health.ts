@@ -68,7 +68,7 @@ export async function buildHealth(c: Config, store: Store, engine: Engine) {
 
   let freeBytes = 0, totalBytes = 0, diskError = "";
   try {
-    const disk = await statfs(c.DATA_DIR);
+    const disk = await statfs(c.NORMAL_CACHE_DIR);
     freeBytes = disk.bavail * disk.bsize;
     totalBytes = disk.blocks * disk.bsize;
   } catch (error) {
@@ -76,16 +76,27 @@ export async function buildHealth(c: Config, store: Store, engine: Engine) {
   }
   let cacheBytes = 0, cacheFiles = 0, cacheTemporaryBytes = 0, cacheError = "";
   try {
-    const cache = path.join(c.DATA_DIR, "cache");
-    for (const entry of await readdir(cache, { withFileTypes: true }))
-      if (entry.isFile()) {
-        cacheFiles++;
-        const size = (await stat(path.join(cache, entry.name))).size;
-        cacheBytes += size;
-        if (/\.(?:part|ytdl|tmp|temp)$/i.test(entry.name)) cacheTemporaryBytes += size;
-      }
+    for (const cache of [...new Set([c.NORMAL_CACHE_DIR, c.MARATHON_CACHE_DIR])])
+      for (const entry of await readdir(cache, { withFileTypes: true }))
+        if (entry.isFile() && /^[A-Za-z0-9_-]{11}\.\d+p\d+\./.test(entry.name)) {
+          cacheFiles++;
+          const size = (await stat(path.join(cache, entry.name))).size;
+          cacheBytes += size;
+          if (/\.(?:part|ytdl|tmp|temp)$/i.test(entry.name)) cacheTemporaryBytes += size;
+        }
   } catch (error: any) {
     if (error?.code !== "ENOENT") cacheError = error instanceof Error ? error.message : "Cache inspection failed";
+  }
+  const legacyCacheDirectory = path.join(c.DATA_DIR, "cache");
+  let legacyCacheBytes = 0, legacyCacheFiles = 0;
+  if (![c.NORMAL_CACHE_DIR, c.MARATHON_CACHE_DIR].includes(legacyCacheDirectory)) {
+    try {
+      for (const entry of await readdir(legacyCacheDirectory, { withFileTypes: true }))
+        if (entry.isFile() && /^[A-Za-z0-9_-]{11}\.\d+p\d+\./.test(entry.name)) {
+          legacyCacheFiles++;
+          legacyCacheBytes += (await stat(path.join(legacyCacheDirectory, entry.name))).size;
+        }
+    } catch {}
   }
   let ownerStatus: HealthStatus = "healthy", ownerSummary = "This server owns the runtime lock.", ownerPid: number | null = null;
   try {
@@ -150,8 +161,8 @@ export async function buildHealth(c: Config, store: Store, engine: Engine) {
     item("youtube-auth", "YouTube authentication/cookies", localMode ? "inactive" : authDiagnostic ? statusFor(authDiagnostic) : "healthy", localMode ? "Not required in Local Files Only mode." : c.YTDLP_COOKIES_FILE ? "Cookie file is configured and no unresolved rejection is recorded." : "Public-client mode is active; cookies are optional.", { mode: c.YTDLP_COOKIES_FILE ? "Cookies configured" : "Public clients", cookieFileAvailable: cookieAvailable }, authDiagnostic),
     item("downloads", "Downloads", downloadStatus, localMode ? "Local files are used directly; downloads are disabled." : snapshot.download ? `${snapshot.download.title}: ${snapshot.download.percent === null ? "working" : Math.round(snapshot.download.percent) + "%"}.` : downloadStatus === "healthy" ? "The download pipeline has a recent success." : `${consecutiveDownloadFailures} consecutive failure(s).`, { activeVideo: snapshot.download?.title ?? null, progressPercent: snapshot.download?.percent ?? null, attempt: snapshot.download?.attempt ?? null, lastSuccess: safeTime(lastDownloadSuccess) || null, lastFailure: safeTime(lastDownloadFailure) || null }, downloadDiagnostic),
     item("buffering", "Buffering", snapshot.state === "buffering" && snapshot.bufferedCount === 0 && downloadRecord ? "critical" : snapshot.bufferedCount < snapshot.bufferTarget && snapshot.state !== "stopped" ? "degraded" : "healthy", snapshot.state === "stopped" ? "Playback is stopped; the rolling buffer is inactive." : `${snapshot.bufferedCount} of ${snapshot.bufferTarget} target videos are prepared.`, { state: snapshot.state, preparedVideos: snapshot.bufferedCount, targetVideos: snapshot.bufferTarget }, downloadDiagnostic),
-    item("cache", "Media cache", cacheStatus, cacheError ? "The cache directory could not be inspected." : `${(cacheBytes / 1073741824).toFixed(2)} GB of ${(cacheLimit / 1073741824).toFixed(2)} GB used across ${cacheFiles} file(s).`, { usageBytes: cacheBytes, limitBytes: cacheLimit, cachedFiles: cacheFiles, temporaryBytes: cacheTemporaryBytes, activeDownload: !!snapshot.download }, cacheDiagnostic),
-    item("disk", "Disk/storage", diskStatus, diskError ? "The data volume could not be inspected." : `${(freeBytes / 1073741824).toFixed(1)} GB free.`, { freeBytes, totalBytes, dataDirectory: c.DATA_DIR }, diskDiagnostic),
+    item("cache", "Media cache", cacheStatus, cacheError ? "The cache directory could not be inspected." : `${(cacheBytes / 1073741824).toFixed(2)} GB of ${(cacheLimit / 1073741824).toFixed(2)} GB used across ${cacheFiles} file(s).`, { usageBytes: cacheBytes, limitBytes: cacheLimit, cachedFiles: cacheFiles, temporaryBytes: cacheTemporaryBytes, activeDownload: !!snapshot.download, normalCacheDirectory: c.NORMAL_CACHE_DIR, marathonCacheDirectory: c.MARATHON_CACHE_DIR, legacyCacheDirectory, legacyCacheBytes, legacyCacheFiles, legacyCacheAction: legacyCacheBytes ? "Review and move or delete only with owner authorization" : "No legacy managed media detected" }, cacheDiagnostic),
+    item("disk", "Disk/storage", diskStatus, diskError ? "The data volume could not be inspected." : `${(freeBytes / 1073741824).toFixed(1)} GB free.`, { freeBytes, totalBytes, mediaDestination: c.NORMAL_CACHE_DIR, normalCacheDirectory: c.NORMAL_CACHE_DIR, marathonCacheDirectory: c.MARATHON_CACHE_DIR, dataDirectory: c.DATA_DIR }, diskDiagnostic),
     item("ffmpeg", "FFmpeg", !ffmpeg.available ? "critical" : ffmpegRecord ? statusFor(ffmpegRecord) : lastPlaybackStart ? "healthy" : "available", !ffmpeg.available ? "FFmpeg could not be started." : lastPlaybackStart ? `Recent playback began ${ageText(safeTime(lastPlaybackStart))}.` : "Executable is available; no recent playback proves operation yet.", { executable: ffmpeg.version, lastPlaybackStart: safeTime(lastPlaybackStart) || null }, ffmpegDiagnostic),
     item("ffprobe", "FFprobe", !ffprobe.available ? "critical" : mediaRecord && mediaRecord.code !== "IC-MEDIA-004" ? statusFor(mediaRecord) : lastPlaybackStart ? "healthy" : "available", !ffprobe.available ? "FFprobe could not be started." : lastPlaybackStart ? "Recent prepared media passed inspection." : "Executable is available; no recent prepared media proves operation yet.", { executable: ffprobe.version, lastValidatedPlayback: safeTime(lastPlaybackStart) || null }, ffprobeDiagnostic),
     item("playback", "Playback", snapshot.desired && snapshot.state === "stopped" ? "critical" : playbackRecord ? statusFor(playbackRecord) : snapshot.state === "playing" ? "healthy" : "inactive", snapshot.state === "playing" ? `Playing ${snapshot.current?.title ?? "current media"}.` : snapshot.desired ? "Playback is desired but the engine is stopped." : "Playback is stopped by the owner.", { state: snapshot.state, desired: snapshot.desired, currentVideo: snapshot.current?.title ?? null, elapsedSeconds: snapshot.elapsed }, playbackRecord),

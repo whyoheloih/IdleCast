@@ -13,6 +13,15 @@ async function main() {
   const config = readConfig(process.env);
   await mkdir(config.DATA_DIR, { recursive: true, mode: 0o700 });
   await chmod(config.DATA_DIR, 0o700).catch(() => {});
+  for (const directory of [
+    config.NORMAL_CACHE_DIR,
+    config.MARATHON_CACHE_DIR,
+    config.FALLBACK_MEDIA_DIR,
+    config.LOCAL_MEDIA_DIR,
+  ])
+    await mkdir(directory, { recursive: true }).catch((error) =>
+      console.warn(`IdleCast media directory is unavailable: ${directory}`, error),
+    );
   const lockPath = path.join(config.DATA_DIR, "owner.pid");
   async function acquire() {
     try {
@@ -64,8 +73,8 @@ async function main() {
   }
   process.on("SIGTERM", () => void shutdown());
   process.on("SIGINT", () => void shutdown());
-  server.on("error", () => {
-    console.error("HTTP listener failed");
+  server.on("error", (error) => {
+    console.error(`HTTP listener failed on ${config.HOST}:${config.PORT}`, error);
     void shutdown();
   });
   if (store.get("desired", false))

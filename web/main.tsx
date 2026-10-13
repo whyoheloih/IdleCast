@@ -1296,11 +1296,27 @@ function App() {
                 </select>
               </label>
               {settings.mediaSource === "local" && (
-                <label>
-                  Local media folder
-                  <input value={settings.localDirectory} onChange={(e) => change({ localDirectory: e.target.value })} placeholder={"E:\\IdleCast Media"} />
-                  <span className="hint">IdleCast scans this folder and nested folders. Original files are played in place and never moved or deleted.</span>
-                </label>
+                <div className="local-folder-setting">
+                  <label>
+                    Local media folder
+                    <input value={settings.localDirectory} onChange={(e) => change({ localDirectory: e.target.value })} placeholder={"E:\\ejbot\\Documents\\Idle Cast\\Idle Cast Local Only Mode"} />
+                    <span className="hint">IdleCast scans this folder and nested folders. Original files are played in place and never moved or deleted.</span>
+                  </label>
+                  <div className="heading-actions">
+                    <button type="button" disabled={!!busy} onClick={() => void action("open-local-folder", async () => {
+                      const result = await api("local-media/open", "POST");
+                      setNotice("Opened local videos folder: " + result.directory);
+                    })}>
+                      <Download size={16} /> Open Local Videos Folder
+                    </button>
+                    <button type="button" disabled={!!busy || dirty} onClick={() => void action("rescan-local-folder", async () => {
+                      await api("sync", "POST");
+                      setNotice("Local videos rescanned.");
+                    })}>
+                      <RefreshCw size={16} /> Refresh / Rescan
+                    </button>
+                  </div>
+                </div>
               )}
               {settings.mediaSource === "local" ? (
                 <p className="hint">Local playback does not use the YouTube API or yt-dlp. Rescan after adding, moving, or renaming files.</p>

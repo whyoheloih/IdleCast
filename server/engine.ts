@@ -153,17 +153,18 @@ export class Engine extends EventEmitter {
       dependencies.playlist ??
       new YouTubePlaylistProvider(config.YOUTUBE_API_KEY);
     this.emergencyFallback = new EmergencyFallbackCatalog(store, config);
-    try {
-      const cache = path.join(config.DATA_DIR, "cache");
-      for (const name of readdirSync(cache)) {
-        const match = name.match(/^([A-Za-z0-9_-]{11})\.\d+p\d+\.(?:mp4|mkv|webm)$/);
-        if (match)
-          this.cachedSizes.set(
-            match[1],
-            (this.cachedSizes.get(match[1]) ?? 0) + statSync(path.join(cache, name)).size,
-          );
-      }
-    } catch {}
+    for (const cache of [...new Set([config.NORMAL_CACHE_DIR, config.MARATHON_CACHE_DIR])]) {
+      try {
+        for (const name of readdirSync(cache)) {
+          const match = name.match(/^([A-Za-z0-9_-]{11})\.\d+p\d+\.(?:mp4|mkv|webm)$/);
+          if (match)
+            this.cachedSizes.set(
+              match[1],
+              (this.cachedSizes.get(match[1]) ?? 0) + statSync(path.join(cache, name)).size,
+            );
+        }
+      } catch {}
+    }
     this.resyncTimer = setInterval(() => {
       const s = store.settings();
       if (

@@ -1,4 +1,4 @@
-import { realpath, stat, readdir, rm, mkdir } from "node:fs/promises";
+import { realpath, stat, statfs, readdir, rm, mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Config, Settings } from "./config.js";
 import { runCapture, withCancellation, delay } from "./process.js";
@@ -281,21 +281,35 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
   constructor(
     private c: Config,
     private run: typeof runCapture = runCapture,
-    private quality: Pick<Settings, "height" | "fps"> = { height: 720, fps: 30 },
+    private quality: Pick<Settings, "height" | "fps" | "bitrateKbps"> = { height: 720, fps: 30, bitrateKbps: 2500 },
     private hooks: MediaSourceHooks = {},
   ) {}
+  private managedRoots() {
+    return [...new Set([this.c.NORMAL_CACHE_DIR, this.c.MARATHON_CACHE_DIR])];
+  }
+  private cacheRoot(item: PlaylistItem) {
+    return item.id.startsWith("marathon:") ? this.c.MARATHON_CACHE_DIR : this.c.NORMAL_CACHE_DIR;
+  }
+  private managedName(name: string) {
+    return /^[A-Za-z0-9_-]{11}\.\d+p\d+\./.test(name);
+  }
   retain(ids: string[]) { this.retained = new Set(ids.map((id) => this.cacheName(id))); }
   async remove(id: string) {
-    const root = path.join(this.c.DATA_DIR, "cache");
-    await mkdir(root, { recursive: true });
-    await this.cleanup(root, id);
+    for (const root of this.managedRoots()) {
+      await mkdir(root, { recursive: true });
+      await this.cleanup(root, id);
+    }
   }
   async resolve(item: PlaylistItem, signal: AbortSignal): Promise<string> {
     signal = AbortSignal.any([signal, this.lifetime.signal]);
     signal.throwIfAborted();
-    const root = path.join(this.c.DATA_DIR, "cache");
+    const root = this.cacheRoot(item);
     await mkdir(root, { recursive: true });
-    const cached = await this.cachedFile(root, item.videoId);
+    let cached = await this.cachedFile(root, item.videoId);
+    if (!cached) {
+      for (const alternate of this.managedRoots())
+        if (alternate !== root && (cached = await this.cachedFile(alternate, item.videoId))) break;
+    }
     if (cached) {
       this.hooks.onResolved?.(item);
       return cached;
@@ -328,7 +342,9 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
   private async cleanup(root: string, id: string) {
     try {
       const base = this.cacheName(id) + ".";
-      for (const name of await readdir(root)) if (name.startsWith(base)) await this.removeCached(root, name);
+      for (const name of await readdir(root))
+        if (this.managedName(name) && name.startsWith(base))
+          await this.removeCached(root, name);
     } catch (error) {
       throw new Error(`Cache cleanup failed: ${error instanceof Error ? error.message : "unknown error"}`);
     }
@@ -336,18 +352,42 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
   private async download(item: PlaylistItem, signal: AbortSignal) {
     if (!this.c.EXPERIMENTAL_YOUTUBE) throw new Error("Experimental YouTube source is disabled");
     if (!/^[A-Za-z0-9_-]{11}$/.test(item.videoId)) throw new Error("Invalid YouTube video identifier");
-    const root = path.join(this.c.DATA_DIR, "cache");
+    const root = this.cacheRoot(item);
     await mkdir(root, { recursive: true });
     const cacheLimit = this.c.CACHE_MAX_MB * 1024 * 1024;
     // Leave room for the rolling buffer instead of allowing one unusually
     // large video to consume the entire configured cache.
     const perVideoLimit = Math.floor(cacheLimit / 2);
     const requested = this.cacheName(item.videoId);
-    for (const name of await readdir(root))
-      if (![...this.retained].some((base) => name.startsWith(base + ".")) && !name.startsWith(requested + "."))
-        await this.removeCached(root, name);
+    for (const managedRoot of this.managedRoots()) {
+      await mkdir(managedRoot, { recursive: true });
+      for (const name of await readdir(managedRoot))
+        if (
+          this.managedName(name) &&
+          ![...this.retained].some((base) => name.startsWith(base + ".")) &&
+          !(managedRoot === root && name.startsWith(requested + "."))
+        )
+          await this.removeCached(managedRoot, name);
+    }
     const cached = await this.cachedFile(root, item.videoId);
     if (cached) return cached;
+    const disk = await statfs(root).catch(() => null);
+    const estimatedBytes = Math.min(
+      perVideoLimit,
+      Math.max(1073741824, Math.ceil((item.duration ?? 1800) * (this.quality.bitrateKbps + 192) * 250)),
+    );
+    if (!disk)
+      throw new Error("Cache storage is unavailable on the configured media destination");
+    const freeBytes = disk.bavail * disk.bsize;
+    let managedBytes = 0;
+    for (const managedRoot of this.managedRoots())
+      for (const name of await readdir(managedRoot))
+        if (this.managedName(name))
+          managedBytes += await stat(path.join(managedRoot, name)).then((entry) => entry.size).catch(() => 0);
+    if (managedBytes + estimatedBytes > cacheLimit)
+      throw new Error(`Media cache limit exceeded before download: ${Math.round(managedBytes / 1048576)} MB managed, ${Math.round(estimatedBytes / 1048576)} MB estimated`);
+    if (freeBytes < estimatedBytes)
+      throw new Error(`Media disk is full or lacks download/merge headroom: ${Math.round(freeBytes / 1048576)} MB free, ${Math.round(estimatedBytes / 1048576)} MB required`);
     let lastError: unknown;
     let finalAttempt = 0;
     let usePublicClients = !this.c.YTDLP_COOKIES_FILE || this.cookiesRejected;
@@ -458,6 +498,7 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
        "--ffmpeg-location", this.c.FFMPEG_PATH, "--merge-output-format", "mp4",
        "-f", formatSelector,
        "-S", "res:" + this.quality.height + ",fps:" + this.quality.fps,
+       "--paths", "temp:" + root,
        "-o", path.join(root, this.cacheName(item.videoId) + ".%(ext)s"), "--",
        "https://www.youtube.com/watch?v=" + item.videoId],
       signal, 43200000,
@@ -465,13 +506,17 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
         let total = 0;
         let requestedBytes = 0;
         const requested = this.cacheName(item.videoId) + ".";
-        for (const name of await readdir(root)) {
-          try {
-            const size = (await stat(path.join(root, name))).size;
-            total += size;
-            if (name.startsWith(requested)) requestedBytes += size;
-          } catch (error: any) {
-            if (error.code !== "ENOENT") throw error;
+        for (const managedRoot of this.managedRoots()) {
+          await mkdir(managedRoot, { recursive: true });
+          for (const name of await readdir(managedRoot)) {
+            if (!this.managedName(name)) continue;
+            try {
+              const size = (await stat(path.join(managedRoot, name))).size;
+              total += size;
+              if (managedRoot === root && name.startsWith(requested)) requestedBytes += size;
+            } catch (error: any) {
+              if (error.code !== "ENOENT") throw error;
+            }
           }
         }
         if (total > cacheLimit) throw new Error("Media cache limit exceeded");

@@ -105,7 +105,9 @@ Credentials come from encrypted in-app storage or the environment fallback and a
 | `EXPERIMENTAL_YOUTUBE`                      | Explicit adapter enablement; example file sets true                       |
 | `PUBLIC_ORIGIN`                             | `http://localhost:3000`                                                   |
 | `COOKIE_SECURE`                             | false for loopback, true with remote HTTPS                                |
-| `DATA_DIR`                                  | `./data`; Compose uses `/app/data`                                        |
+| `DATA_DIR`                                  | `./data`; database, logs, and ownership state                            |
+| `NORMAL_CACHE_DIR`, `MARATHON_CACHE_DIR` | Managed video caches; Windows defaults to the requested E-drive folders     |
+| `FALLBACK_MEDIA_DIR`, `LOCAL_MEDIA_DIR`   | User-owned media roots; never removed by managed-cache cleanup               |
 | `MEDIA_DIR`                                 | `./media`; optional local media and avatar images                         |
 | `CACHE_MAX_MB`                              | 25600; each completed item limited to half the cache                      |
 | `UDP_BASE_PORT`                             | 19000; two loopback-only receiver ports                                   |
@@ -150,7 +152,15 @@ pnpm build
 pnpm start
 ```
 
-For hot reload, run `pnpm dev` and `pnpm exec vite` in separate terminals, with `PUBLIC_ORIGIN=http://localhost:5173`. Open port 5173. The Vite proxy forwards API requests to port 3000.
+Run the current dashboard and backend together at [http://localhost:3000](http://localhost:3000):
+
+```sh
+pnpm dev
+```
+
+The command refreshes the frontend bundle before starting the watched backend, preventing an older `dist` dashboard from hiding newly implemented pages.
+
+Optional verification commands:
 
 ```sh
 pnpm check
