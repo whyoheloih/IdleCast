@@ -1965,7 +1965,7 @@ function FilterPanel({
             onChange={(event) => update({ seriesMode: event.target.value as typeof filters.seriesMode })}
           >
             <option value="off">Do not detect series</option>
-            <option value="strict">Exact episode labels</option>
+            <option value="strict">Exact series titles</option>
             <option value="smart">Flexible title numbers</option>
           </select>
         </label>
@@ -1973,8 +1973,8 @@ function FilterPanel({
           {filters.seriesMode === "off"
             ? "Videos are shuffled normally, even when their titles look related."
             : filters.seriesMode === "strict"
-              ? "Uses clear labels such as Episode 2, Part 3, #4, [5], or (6). This avoids grouping unrelated numbered titles."
-              : "Uses clear episode labels and can also group similar titles ending in numbers. This finds more series, but may occasionally group unrelated videos."}
+              ? "Uses VIDEO TITLE | SERIES NAME [EPISODE NUMBER] as the authoritative format. It also preserves older clear labels such as Episode 4."
+              : "Prioritizes VIDEO TITLE | SERIES NAME [EPISODE NUMBER], then checks older clear labels and similar titles ending in numbers."}
         </p>
         <label className="series-limit">
           Maximum videos played together: <b>{filters.seriesLimit}</b>
