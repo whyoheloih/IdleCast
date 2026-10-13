@@ -3,15 +3,17 @@ export const updateCommand =
 
 export const updateHistory = [
   {
-    version: "Unreleased",
+    version: "1.5.0",
     date: "Oct 13, 2026",
-    title: "E-drive media storage and integration repair",
+    title: "Marathon, local media, fallback, and storage integration",
     items: [
       "Normal and Marathon managed downloads use separate E-drive directories while sharing one 25 GB cache budget",
       "yt-dlp partial files and merge preparation stay on the selected destination drive",
       "Health reports the actual media destination and reports legacy C-drive cache files without deleting them",
       "Local Files Only and Emergency Fallback folders open directly from their existing dashboard controls",
       "The development command refreshes the current frontend bundle before starting localhost:3000",
+      "Marathon Play, Local Files Only, Emergency Fallback recovery, persistent warnings, and precise error diagnostics are integrated into the current application",
+      "Windows folder buttons now open the configured Emergency Fallback and Local Videos directories visibly",
     ],
   },
   {
