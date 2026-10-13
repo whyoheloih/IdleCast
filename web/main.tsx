@@ -8,6 +8,7 @@ import {
   Settings2,
   ScrollText,
   HeartPulse,
+  CircleAlert,
   Play,
   Square,
   SkipForward,
@@ -40,6 +41,7 @@ import { OverlayEditor } from "./OverlayEditor";
 import { Credentials } from "./Credentials";
 import { YouTubeViewer } from "./YouTubeViewer";
 import { HealthPage } from "./HealthPage";
+import { ErrorsPage, type ErrorsReport } from "./ErrorsPage";
 import { MarathonPage, isMarathonItem, type MarathonRecord } from "./MarathonPage";
 import { updateCommand, updateHistory } from "../server/updates";
 import "./style.css";
@@ -162,6 +164,7 @@ const nav = [
   ["Logs", ScrollText],
   ["Updates", ClipboardList],
   ["Health", HeartPulse],
+  ["Errors", CircleAlert],
 ] as const;
 function App() {
   const [auth, setAuth] = useState<boolean | null>(null),
@@ -178,6 +181,7 @@ function App() {
       localStorage.getItem("idlecast-theme") === "light" ? "light" : "dark",
     ),
     [health, setHealth] = useState<any>(null),
+    [errorsReport, setErrorsReport] = useState<ErrorsReport | null>(null),
     [error, setError] = useState(""),
     [notice, setNotice] = useState(""),
     [busy, setBusy] = useState(""),
@@ -290,6 +294,24 @@ function App() {
     };
     update();
     const timer = setInterval(update, 15000);
+    return () => clearInterval(timer);
+  }, [page, auth]);
+  useEffect(() => {
+    if (!auth) return;
+    const updateErrors = async () => {
+      try {
+        const report = await api("errors") as ErrorsReport;
+        if (page === "Errors" && report.unreadCount > 0) {
+          const seen = await api("errors/seen", "POST", { count: report.unreadCount, through: report.generatedAt });
+          report.unreadCount = seen.unreadCount;
+        }
+        setErrorsReport(report);
+      } catch (e: any) {
+        if (page === "Errors") setError(e.message);
+      }
+    };
+    void updateErrors();
+    const timer = setInterval(() => void updateErrors(), 15000);
     return () => clearInterval(timer);
   }, [page, auth]);
   async function action(name: string, fn: () => Promise<any>) {
@@ -438,6 +460,7 @@ function App() {
               <Icon size={19} />
               <span>{name}</span>
               {name === "Playlist" && <b>{state?.count ?? 0}</b>}
+              {name === "Errors" && !!errorsReport?.unreadCount && <b className="error-notification" aria-label={`${errorsReport.unreadCount} new errors`}>{errorsReport.unreadCount > 99 ? "99+" : errorsReport.unreadCount}</b>}
             </button>
           ))}
         </nav>
@@ -1617,6 +1640,7 @@ function App() {
           </div>
         )}
         {page === "Health" && <HealthPage health={health} onNotice={setNotice} />}
+        {page === "Errors" && <ErrorsPage report={errorsReport} onNotice={setNotice} />}
         {settings && (
           <OverlayEditor
             open={overlayEditorOpen}

@@ -17,6 +17,7 @@ import { settingsSchema } from "./config.js";
 import { Store } from "./db.js";
 import { Engine } from "./engine.js";
 import { buildHealth } from "./health.js";
+import { DIAGNOSTIC_REGISTRY, sanitizeDiagnosticRuntime } from "./diagnostics.js";
 import { OverlayPreview } from "./preview.js";
 import { credentialStore } from "./credentials.js";
 import { APP_VERSION } from "./version.js";
@@ -560,6 +561,56 @@ export function createApp(c: Config, store: Store, engine: Engine) {
   app.post("/api/skip", (_req, res) => {
     engine.skip();
     res.json({ ok: true });
+  });
+  const errorReport = (limit = 100) => {
+    const issues = store.diagnostics(100)
+      .filter((record) => DIAGNOSTIC_REGISTRY[record.code].severity !== "info");
+    let totalOccurrences = store.get<number | null>("diagnostics.totalErrorOccurrences", null);
+    let unreadCount = store.get<number | null>("diagnostics.unreadCount", null);
+    if (totalOccurrences === null) {
+      totalOccurrences = issues.length;
+      store.set("diagnostics.totalErrorOccurrences", totalOccurrences);
+    }
+    if (unreadCount === null) {
+      unreadCount = issues.length;
+      store.set("diagnostics.unreadCount", unreadCount);
+    }
+    return {
+      version: APP_VERSION,
+      generatedAt: Date.now(),
+      totalOccurrences,
+      unreadCount,
+      retainedCount: issues.length,
+      criticalCount: issues.filter((record) => DIAGNOSTIC_REGISTRY[record.code].severity === "critical").length,
+      warningCount: issues.filter((record) => DIAGNOSTIC_REGISTRY[record.code].severity === "warning").length,
+      records: issues.slice(0, limit).map((record) => ({
+        record: {
+          ...record,
+          observed: String(sanitizeDiagnosticRuntime(record.observed)),
+          runtime: sanitizeDiagnosticRuntime(record.runtime) as Record<string, unknown>,
+        },
+        definition: DIAGNOSTIC_REGISTRY[record.code],
+      })),
+    };
+  };
+  app.get("/api/errors", (req, res) => {
+    const parsed = z.object({ limit: z.coerce.number().int().min(1).max(100).default(100) }).strict().safeParse(req.query);
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid error limit" });
+      return;
+    }
+    res.json(errorReport(parsed.data.limit));
+  });
+  app.post("/api/errors/seen", (req, res) => {
+    const parsed = z.object({ count: z.number().int().min(0), through: z.number().int().positive() }).strict().safeParse(req.body ?? {});
+    if (!parsed.success) {
+      res.status(400).json({ error: "Invalid seen-error marker" });
+      return;
+    }
+    const unreadCount = Math.max(0, store.get("diagnostics.unreadCount", 0) - parsed.data.count);
+    store.set("diagnostics.unreadCount", unreadCount);
+    store.set("diagnostics.lastViewedAt", parsed.data.through);
+    res.json({ ok: true, unreadCount });
   });
   app.get("/api/logs", (_req, res) => res.json(store.logs()));
   app.get("/api/history", (req, res) => {

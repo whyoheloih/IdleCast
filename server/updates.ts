@@ -11,6 +11,8 @@ export const updateHistory = [
       "Sixty-seven stable diagnostic codes identify exact observable failures across downloads, cache, playback, transitions, output, API, authentication, database, playlist, and system components",
       "Expandable Health details explain each status and provide a sanitized Copy Diagnostic for Codex report",
       "Diagnostic definitions and Codex investigation rules are documented as a permanent debugging API",
+      "A dedicated Errors tab lists every retained warning and critical occurrence with its exact IC code, detection rule, source components, and sanitized runtime evidence",
+      "A red sidebar badge counts new error occurrences, while Copy Diagnostic for Codex creates a self-contained investigation report",
     ],
   },
   {

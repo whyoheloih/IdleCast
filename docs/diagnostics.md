@@ -29,12 +29,21 @@ Idlecast diagnostic codes are a permanent debugging API shared by the applicatio
 | `IC-PL` | Playlist synchronization and eligibility |
 | `IC-LOCAL` | Local folder scanning and local media availability |
 | `IC-MAR` | Marathon scheduling, source readiness, and queue handoff |
+| `IC-FALLBACK` | Emergency fallback selection, recovery, retry limits, and warning state |
 
 ## Health page behavior
 
 `server/health.ts` combines current process state, executable checks, SQLite integrity, disk/cache measurements, download and transition success telemetry, output state, and recent unresolved diagnostic records. The Health page reports `HEALTHY`, `DEGRADED`, or `CRITICAL` overall and lets the operator expand every subsystem to see the evidence behind its status.
 
 Finding an executable proves only that it is **Available**. A recent successful operation is required before an operational subsystem is reported as **Healthy**. Recent failures remain visible until a relevant later success demonstrates recovery or the diagnostic age expires.
+
+## Errors tab
+
+The Errors tab lists the latest retained warning and critical diagnostic occurrences. Its sidebar badge is the persisted count of error occurrences that have not yet been reviewed. Opening the tab marks the current occurrences as seen while leaving the full diagnostic history intact.
+
+Every occurrence displays its stable code, exact meaning, detection condition, sanitized runtime evidence, relevant source components, and developer investigation guidance. **Copy Diagnostic for Codex** produces a self-contained report that directs Codex to the authoritative registry entry and explicitly requires fixing the detected condition rather than hiding the diagnostic.
+
+The application also keeps a cumulative occurrence count separately from the bounded 100-record diagnostic history, so the unread badge and total count do not depend on log retention.
 
 ## When a user gives Codex a diagnostic code
 

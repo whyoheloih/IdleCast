@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { randomUUID } from "node:crypto";
 import { defaults, settingsSchema, type Settings } from "./config.js";
 import type { PlaylistItem } from "./providers.js";
-import type { DiagnosticRecord } from "./diagnostics.js";
+import { DIAGNOSTIC_REGISTRY, type DiagnosticRecord } from "./diagnostics.js";
 export type MarathonSourceType = "youtube" | "local";
 export type MarathonStatus = "draft" | "scheduled" | "active" | "ending" | "completed" | "ended_early" | "cancelled" | "failed";
 export type Marathon = {
@@ -620,6 +620,13 @@ export class Store {
     const records = this.get<DiagnosticRecord[]>("diagnostics", []);
     records.unshift(record);
     this.set("diagnostics", records.slice(0, 100));
+    if (DIAGNOSTIC_REGISTRY[record.code].severity !== "info") {
+      const retainedBeforeThis = records.slice(1).filter((entry) => DIAGNOSTIC_REGISTRY[entry.code].severity !== "info").length;
+      const total = this.get<number | null>("diagnostics.totalErrorOccurrences", null);
+      const unread = this.get<number | null>("diagnostics.unreadCount", null);
+      this.set("diagnostics.totalErrorOccurrences", (total ?? retainedBeforeThis) + 1);
+      this.set("diagnostics.unreadCount", (unread ?? retainedBeforeThis) + 1);
+    }
   }
   diagnostics(limit = 50): DiagnosticRecord[] {
     return this.get<DiagnosticRecord[]>("diagnostics", []).slice(0, limit);

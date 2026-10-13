@@ -99,6 +99,7 @@ aside {
   background: #15181d;
   display: flex;
   flex-direction: column;
+  overflow-y: auto;
 }
 .brand {
   display: flex;
@@ -1893,3 +1894,75 @@ html[data-theme="light"] .fallback-warning-facts span { background: #fff7f5; bor
 html[data-theme="light"] .fallback-warning-facts b { color: #562e29; }
 @media (max-width: 950px) { .fallback-warning-facts { grid-template-columns: repeat(2,minmax(0,1fr)); } }
 @media (max-width: 560px) { .fallback-warning-facts { grid-template-columns: 1fr; } }
+
+/* Codex-ready Errors tab */
+nav b.error-notification {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  min-width: 22px;
+  margin-left: auto;
+  padding: 0;
+  border: 2px solid #ffb4ac;
+  border-radius: 50%;
+  background: #d92d20;
+  color: #fff;
+  box-shadow: 0 0 0 2px #15181d;
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1;
+}
+.errors-page { display: flex; flex-direction: column; gap: 20px; }
+.errors-intro { display: flex; align-items: center; gap: 16px; padding: 22px; border-color: #633039; background: linear-gradient(110deg, #2f191e, #191b22 62%); }
+.errors-intro-icon { display: flex; align-items: center; justify-content: center; width: 48px; height: 48px; flex: 0 0 48px; border: 1px solid #87404a; border-radius: 50%; background: #401f26; color: #ff877d; }
+.errors-intro h2 { margin: 5px 0 7px; font-size: 20px; }
+.errors-intro p { margin: 0; color: #9da6b1; line-height: 1.6; }
+.errors-list { overflow: hidden; }
+.errors-list .panel-heading { border-bottom: 1px solid #2b3038; }
+.error-occurrence { --error-color: #e8a064; border-bottom: 1px solid #2b3038; }
+.error-occurrence:last-child { border-bottom: 0; }
+.error-occurrence.error-critical { --error-color: #ff7168; }
+.error-occurrence summary { display: grid; grid-template-columns: 24px auto minmax(0,1fr) auto auto; align-items: center; gap: 12px; padding: 15px 18px; cursor: pointer; list-style: none; }
+.error-occurrence summary::-webkit-details-marker { display: none; }
+.error-occurrence summary:hover { background: #1d222a; }
+.error-occurrence-icon { display: flex; color: var(--error-color); }
+.error-code { padding: 5px 8px; border: 1px solid color-mix(in srgb, var(--error-color) 52%, #2b3038); border-radius: 5px; background: color-mix(in srgb, var(--error-color) 10%, #171a20); color: var(--error-color); font: 10px/1.2 ui-monospace, monospace; white-space: nowrap; }
+.error-summary { display: flex; flex-direction: column; min-width: 0; gap: 5px; }
+.error-summary b { font-size: 12px; }
+.error-summary small { overflow: hidden; color: #8f99a5; text-overflow: ellipsis; white-space: nowrap; }
+.error-subsystem { color: #a7b0bb; font-size: 9px; letter-spacing: .06em; text-transform: uppercase; }
+.error-occurrence summary time { color: #74808d; font-size: 9px; white-space: nowrap; }
+.error-details { padding: 18px 22px 22px 58px; border-top: 1px solid #2b3038; background: #15181e; }
+.error-actions { display: flex; justify-content: flex-end; gap: 9px; margin-bottom: 16px; }
+.error-actions button { display: inline-flex; align-items: center; gap: 7px; }
+.error-explanation-grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 1px; overflow: hidden; border: 1px solid #303640; border-radius: 8px; background: #303640; }
+.error-explanation-grid section { min-width: 0; padding: 15px; background: #1a1d23; }
+.error-explanation-grid .error-wide { grid-column: 1 / -1; }
+.error-explanation-grid h3 { margin: 0 0 7px; color: var(--error-color); font-size: 9px; letter-spacing: .08em; text-transform: uppercase; }
+.error-explanation-grid p, .error-explanation-grid ol { margin: 0; line-height: 1.65; overflow-wrap: anywhere; }
+.error-explanation-grid ol { padding-left: 18px; }
+.error-explanation-grid pre { max-height: 260px; overflow: auto; margin: 0; padding: 12px; border: 1px solid #303741; border-radius: 6px; background: #111419; color: #c8d2dc; font: 10px/1.55 ui-monospace, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+html[data-theme="light"] nav b.error-notification { box-shadow: 0 0 0 2px #eff6fb; }
+html[data-theme="light"] .errors-intro { border-color: #d99b9c; background: linear-gradient(110deg, #fff0f0, #eff6fb 62%); }
+html[data-theme="light"] .errors-intro-icon { border-color: #d18487; background: #ffe2e2; color: #af292c; }
+html[data-theme="light"] .errors-list .panel-heading, html[data-theme="light"] .error-occurrence, html[data-theme="light"] .error-details { border-color: #bfd0de; }
+html[data-theme="light"] .error-occurrence summary:hover { background: #e9f2f8; }
+html[data-theme="light"] .error-details { background: #eef5fa; }
+html[data-theme="light"] .error-explanation-grid { border-color: #bfd0de; background: #bfd0de; }
+html[data-theme="light"] .error-explanation-grid section { background: #f8fbfe; }
+html[data-theme="light"] .error-explanation-grid pre { background: #fff; border-color: #c7d4de; color: #23384b; }
+@media (max-width: 900px) {
+  .error-occurrence summary { grid-template-columns: 22px auto minmax(0,1fr); }
+  .error-subsystem, .error-occurrence summary time { grid-column: 3; }
+  .error-details { padding: 16px; }
+}
+@media (max-width: 620px) {
+  .errors-intro { align-items: flex-start; }
+  .error-occurrence summary { grid-template-columns: 22px minmax(0,1fr); }
+  .error-code, .error-summary, .error-subsystem, .error-occurrence summary time { grid-column: 2; }
+  .error-explanation-grid { grid-template-columns: 1fr; }
+  .error-explanation-grid .error-wide { grid-column: 1; }
+  .error-actions { align-items: stretch; flex-direction: column; }
+}
