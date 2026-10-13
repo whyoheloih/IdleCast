@@ -1,4 +1,5 @@
 name: Build and publish IdleCast 1.5.0
+# Rebuild after correcting recovery-state and downloader type contracts.
 
 on:
   push:
