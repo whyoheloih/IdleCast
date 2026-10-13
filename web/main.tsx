@@ -334,15 +334,17 @@ function App() {
     const timer = setInterval(() => void updateErrors(), 15000);
     return () => clearInterval(timer);
   }, [page, auth]);
-  async function action(name: string, fn: () => Promise<any>) {
+  async function action(name: string, fn: () => Promise<any>): Promise<boolean> {
     setBusy(name);
     setError("");
     setNotice("");
     try {
       await fn();
+      return true;
     } catch (e: any) {
       setError(e.message);
       if (e.status === 401) setAuth(false);
+      return false;
     } finally {
       setBusy("");
     }
@@ -381,14 +383,15 @@ function App() {
       );
     });
   }
-  async function saveMediaSource() {
-    if (!settings) return;
-    await action("source", async () => {
-      await api("settings", "PUT", settings);
+  async function saveMediaSource(patch: Partial<Settings> = {}): Promise<boolean> {
+    if (!settings) return false;
+    const next = { ...settings, ...patch };
+    return action("source", async () => {
+      await api("settings", "PUT", next);
       await loadSettings();
       await api("sync", "POST");
       await loadItems();
-      setNotice(settings.mediaSource === "local" ? "Local folder rescanned." : "YouTube source synced.");
+      setNotice(next.mediaSource === "local" ? "Local folder rescanned." : "YouTube source synced.");
     });
   }
   async function saveFilters() {
@@ -916,7 +919,7 @@ function App() {
             busy={busy}
             current={marathonData}
             onChange={change}
-            onSaveSource={() => void saveMediaSource()}
+            onSaveSource={saveMediaSource}
             onRefresh={() => void loadMarathonData()}
           />
         )}
