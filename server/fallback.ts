@@ -41,6 +41,26 @@ export type RecoveryIncident = {
   preparedKey: string;
 };
 
+export type FallbackStreak = {
+  count: number;
+  warningActive: boolean;
+  warningReachedAt: number | null;
+  lastActivationId: string | null;
+  lastFallbackId: string | null;
+  lastFallbackTitle: string | null;
+  lastFallbackStartedAt: number | null;
+  lastIntendedVideoId: string | null;
+  lastIntendedTitle: string | null;
+  lastIntendedStartedAt: number | null;
+  intendedEntryId: string | null;
+  intendedTitle: string | null;
+  sourceType: "youtube" | "local" | null;
+  recoveryStatus: RecoveryIncident["status"] | null;
+  lastError: string | null;
+  attempts: number;
+  incidentIds: string[];
+};
+
 const supported = new Set([".mp4", ".mkv", ".webm", ".mov"]);
 const cleanTitle = (file: string) => path.basename(file, path.extname(file)).replace(/[._]+/g, " ").replace(/\s+/g, " ").trim();
 

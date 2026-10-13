@@ -88,6 +88,7 @@ export async function overlay(
   publishedAt = "",
   timeline?: { offset: number; total: number },
   marathon?: MarathonOverlay,
+  fallbackTitle = false,
 ): Promise<{ inputs: string[]; filter: string }> {
   const base = `[0:v:0]scale=${s.width}:${s.height}:force_original_aspect_ratio=decrease,pad=${s.width}:${s.height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${s.fps},format=yuv420p[base]`;
   if (!s.overlay.enabled)
@@ -109,6 +110,7 @@ export async function overlay(
     : "";
   const avatarIndex = 2;
   const style = `fontfile='${filterPath(c.FONT_FILE)}':expansion=none:fontcolor=white:bordercolor=black:borderw=${Math.max(1, Math.round(layout.fontSize / 12))}`;
+  const titleStyle = fallbackTitle ? style.replace("fontcolor=white", "fontcolor=0xA8ADB5") : style;
   const timelineText = timeline
     ? `%{eif\\:floor((t+${Math.max(0, timeline.offset)})/60)\\:d\\:2}\\:%{eif\\:floor(t+${Math.max(0, timeline.offset)})-60*floor((t+${Math.max(0, timeline.offset)})/60)\\:d\\:2}/${formatTimeline(timeline.total).replace(/:/g, "\\:")}`
     : "";
@@ -132,7 +134,7 @@ export async function overlay(
   const progressDraw = marathon
     ? `,drawtext=${goldStyle}:textfile='${filterPath(progressFile)}':reload=1:fontsize=${marathonSize}:x=w-tw-${s.overlay.margin + progressRightOffset}:y=h-th-${s.overlay.margin}`
     : "";
-  const draw = `drawtext=${style}:textfile='${filterPath(textFile)}':reload=1:fontsize=${layout.fontSize}:line_spacing=${Math.ceil(layout.fontSize * .25)}:x=${layout.textX}:y=${layout.textY}` +
+  const draw = `drawtext=${titleStyle}:textfile='${filterPath(textFile)}':reload=1:fontsize=${layout.fontSize}:line_spacing=${Math.ceil(layout.fontSize * .25)}:x=${layout.textX}:y=${layout.textY}` +
     (layout.date ? `,drawtext=${style}:textfile='${filterPath(dateFile)}':reload=1:fontsize=${layout.dateSize}:x=${layout.textX}:y=${layout.textY + layout.dateOffset}` : "") +
     (timelineText ? `,drawtext=${style.replace("expansion=none", "expansion=normal")}:text='${timelineText}':fontsize=${timelineSize}:x=w-tw-${s.overlay.margin}:y=h-th-${s.overlay.margin}` : "") +
     marathonDraw + progressDraw + countdown;

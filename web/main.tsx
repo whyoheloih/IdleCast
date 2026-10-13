@@ -78,6 +78,21 @@ type Snapshot = {
     lastError: string;
     startedAt: number;
   } | null;
+  fallbackWarning: {
+    count: number;
+    warningActive: boolean;
+    warningReachedAt: number | null;
+    lastFallbackTitle: string | null;
+    lastFallbackStartedAt: number | null;
+    lastIntendedTitle: string | null;
+    lastIntendedStartedAt: number | null;
+    intendedTitle: string | null;
+    sourceType: "youtube" | "local" | null;
+    recoveryStatus: string | null;
+    lastError: string | null;
+    attempts: number;
+    needsAttention: boolean;
+  };
   emergencyFallback: {
     directory: string;
     available: boolean;
@@ -576,7 +591,38 @@ function App() {
                 }
               />
             </div>
-            {state?.recovery && (
+            {state?.fallbackWarning?.warningActive && (
+              <section className="panel fallback-warning-card" role="alert">
+                <div className="fallback-warning-heading">
+                  <AlertTriangle size={27} />
+                  <div>
+                    <span className="eyebrow">PLAYBACK NEEDS ATTENTION</span>
+                    <h2>Emergency Fallback Warning</h2>
+                  </div>
+                </div>
+                <p>
+                  IdleCast has played <b>{state.fallbackWarning.count} consecutive emergency fallback videos</b> without successfully starting intended content.{" "}
+                  {state.fallbackWarning.recoveryStatus === "recovering"
+                    ? "Automatic recovery is still working in the background."
+                    : state.fallbackWarning.recoveryStatus === "recovered"
+                      ? "The intended video is prepared and will start after the current fallback finishes."
+                      : state.fallbackWarning.recoveryStatus === "paused"
+                        ? "Automatic recovery is paused and needs your attention."
+                        : state.fallbackWarning.recoveryStatus === "exhausted"
+                          ? "Automatic recovery exhausted its allowed attempts and will advance safely."
+                          : "IdleCast is preserving output while it waits for the next intended video."}
+                </p>
+                <div className="fallback-warning-facts">
+                  <span><small>INTENDED VIDEO</small><b>{state.fallbackWarning.intendedTitle ?? "Unavailable"}</b></span>
+                  <span><small>SOURCE</small><b>{state.fallbackWarning.sourceType === "local" ? "Local Files Only" : state.fallbackWarning.sourceType === "youtube" ? "YouTube" : "Unknown"}</b></span>
+                  <span><small>RECOVERY</small><b>{state.fallbackWarning.recoveryStatus ?? "Waiting"}</b></span>
+                  {state.fallbackWarning.sourceType === "youtube" && <span><small>ATTEMPTS</small><b>{state.fallbackWarning.attempts} / 20</b></span>}
+                  <span><small>USER ATTENTION</small><b>{state.fallbackWarning.needsAttention ? "Required" : "Not currently"}</b></span>
+                </div>
+                {state.fallbackWarning.lastError && <div className="fallback-warning-error">{state.fallbackWarning.lastError}</div>}
+              </section>
+            )}
+            {state?.recovery && !state.fallbackWarning?.warningActive && (
               <section className="panel recovery-status-card">
                 <div>
                   <span className="eyebrow">EMERGENCY FALLBACK ACTIVE</span>

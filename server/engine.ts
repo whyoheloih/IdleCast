@@ -33,7 +33,7 @@ import {
 import { playlistId as parsePlaylistId } from "./config.js";
 import { diagnosticForMessage, sanitizeDiagnosticRuntime } from "./diagnostics.js";
 import { LocalFolderPlaylistProvider, type KnownYouTubeMetadata } from "./local-media.js";
-import { EmergencyFallbackCatalog, createRecoveryIncident, type RecoveryIncident, type FallbackMedia } from "./fallback.js";
+import { EmergencyFallbackCatalog, createRecoveryIncident, type RecoveryIncident, type FallbackMedia, type FallbackStreak } from "./fallback.js";
 import { overlay, overlayLayout } from "./overlay.js";
 import {
   audioSampleRate,
@@ -194,12 +194,94 @@ export class Engine extends EventEmitter {
     }
     this.emit("change");
   }
+  private fallbackStreak(): FallbackStreak {
+    return this.store.get<FallbackStreak>("fallbackStreak", {
+      count: 0, warningActive: false, warningReachedAt: null, lastActivationId: null,
+      lastFallbackId: null, lastFallbackTitle: null, lastFallbackStartedAt: null,
+      lastIntendedVideoId: null, lastIntendedTitle: null, lastIntendedStartedAt: null,
+      intendedEntryId: null, intendedTitle: null, sourceType: null,
+      recoveryStatus: null, lastError: null, attempts: 0, incidentIds: [],
+    });
+  }
+
+  private recordFallbackActivation(media: FallbackMedia, incident: RecoveryIncident | null, activationId: string) {
+    const prior = this.fallbackStreak();
+    if (prior.lastActivationId === activationId) return prior;
+    const count = prior.count + 1;
+    const reached = count >= 3;
+    const now = Date.now();
+    const next: FallbackStreak = {
+      ...prior, count, warningActive: reached,
+      warningReachedAt: reached ? prior.warningReachedAt ?? now : null,
+      lastActivationId: activationId, lastFallbackId: media.id,
+      lastFallbackTitle: media.title, lastFallbackStartedAt: now,
+      intendedEntryId: incident?.intendedEntryId ?? prior.intendedEntryId,
+      intendedTitle: incident?.intendedTitle ?? prior.intendedTitle,
+      sourceType: incident?.sourceType ?? prior.sourceType,
+      recoveryStatus: incident?.status ?? prior.recoveryStatus,
+      lastError: incident?.lastError ?? prior.lastError,
+      attempts: incident?.attempts ?? prior.attempts,
+      incidentIds: incident ? [...new Set([...prior.incidentIds, incident.id])].slice(-20) : prior.incidentIds,
+    };
+    this.store.set("fallbackStreak", next);
+    if (incident) {
+      incident.consecutiveFallbackCount = count;
+      incident.currentFallbackId = media.id;
+      this.store.set("activeRecoveryIncident", incident);
+    }
+    if (reached && !prior.warningActive)
+      this.event(`Emergency Fallback warning reached three consecutive fallback starts: ${incident?.intendedTitle ?? "intended content unavailable"}`, "error", { fallbackCount: count, incidentId: incident?.id, entryId: incident?.intendedEntryId });
+    else this.event();
+    return next;
+  }
+
+  private clearFallbackStreak(item: StoredItem) {
+    const prior = this.fallbackStreak();
+    const now = Date.now();
+    this.store.set<FallbackStreak>("fallbackStreak", {
+      ...prior, count: 0, warningActive: false, warningReachedAt: null,
+      lastActivationId: null, lastIntendedVideoId: item.videoId,
+      lastIntendedTitle: item.title, lastIntendedStartedAt: now,
+      intendedEntryId: null, intendedTitle: null, sourceType: null,
+      recoveryStatus: null, lastError: null, attempts: 0, incidentIds: [],
+    });
+    if (prior.count > 0)
+      this.event(`Emergency Fallback warning cleared by intended playback: ${item.title}`, "info", { previousFallbackCount: prior.count, entryId: item.id });
+  }
+
+  private fallbackWarningSnapshot() {
+    const streak = this.fallbackStreak();
+    const incident = this.recoveryIncident();
+    return {
+      ...streak,
+      intendedTitle: incident?.intendedTitle ?? streak.intendedTitle,
+      sourceType: incident?.sourceType ?? streak.sourceType,
+      recoveryStatus: incident?.status ?? streak.recoveryStatus,
+      lastError: incident?.lastError ?? streak.lastError,
+      attempts: incident?.attempts ?? streak.attempts,
+      needsAttention: streak.warningActive && (!incident || ["paused", "exhausted"].includes(incident.status)),
+    };
+  }
   private recoveryIncident() {
     return this.store.get<RecoveryIncident | null>("activeRecoveryIncident", null);
   }
 
   private saveRecoveryIncident(incident: RecoveryIncident | null) {
     this.store.set("activeRecoveryIncident", incident);
+    if (incident) {
+      const streak = this.fallbackStreak();
+      if (streak.count > 0)
+        this.store.set<FallbackStreak>("fallbackStreak", {
+          ...streak,
+          intendedEntryId: incident.intendedEntryId,
+          intendedTitle: incident.intendedTitle,
+          sourceType: incident.sourceType,
+          recoveryStatus: incident.status,
+          lastError: incident.lastError,
+          attempts: incident.attempts,
+          incidentIds: [...new Set([...streak.incidentIds, incident.id])].slice(-20),
+        });
+    }
     this.event();
   }
 
@@ -244,7 +326,7 @@ export class Engine extends EventEmitter {
       incident.attempts = attempts;
       incident.lastAttemptAt = lastAttemptAt;
       incident.status = "recovering";
-      this.store.set("activeRecoveryIncident", incident);
+      this.saveRecoveryIncident(incident);
       this.event(`Intended video recovery attempt ${attempts}/20 started: ${item.title}`, "warn", { incidentId: incident.id, entryId: item.id, attempt: attempts });
     }
     return attempts;
@@ -280,6 +362,18 @@ export class Engine extends EventEmitter {
     const history = this.store.get<RecoveryIncident[]>("recoveryIncidentHistory", []);
     history.unshift(incident);
     this.store.set("recoveryIncidentHistory", history.slice(0, 100));
+    const streak = this.fallbackStreak();
+    if (streak.count > 0)
+      this.store.set<FallbackStreak>("fallbackStreak", {
+        ...streak,
+        intendedEntryId: incident.intendedEntryId,
+        intendedTitle: incident.intendedTitle,
+        sourceType: incident.sourceType,
+        recoveryStatus: incident.status,
+        lastError: incident.lastError,
+        attempts: incident.attempts,
+        incidentIds: [...new Set([...streak.incidentIds, incident.id])].slice(-20),
+      });
     this.store.set("activeRecoveryIncident", null);
   }
 
@@ -452,6 +546,7 @@ export class Engine extends EventEmitter {
       marathonSchedule: this.store.controllingMarathon()?.marathon ?? null,
       recovery: this.recoverySnapshot(),
       emergencyFallback: this.emergencyFallback.snapshot(),
+      fallbackWarning: this.fallbackWarningSnapshot(),
     };
   }
   marathonHandoffConstraints() {
@@ -1593,6 +1688,22 @@ export class Engine extends EventEmitter {
             : `Video has no audio; using ${outputAudioRate} Hz stereo silence`,
         );
         const publishedAt = marathon ? item.publishedAt ?? "" : this.store.get<Record<string, string>>("uploadDates", {})[item.videoId];
+        const fallbackMarathonRecord = isFallback && recovery?.marathonId
+          ? this.store.marathon(recovery.marathonId)?.marathon ?? null
+          : null;
+        const marathonOverlay = marathon
+          ? {
+              name: marathon.name,
+              completed: this.store.marathon(marathon.id)?.marathon.completedEntries ?? 0,
+              total: this.store.marathon(marathon.id)?.marathon.totalEntries ?? 0,
+            }
+          : fallbackMarathonRecord && ["active", "ending"].includes(fallbackMarathonRecord.status)
+            ? {
+                name: fallbackMarathonRecord.name,
+                completed: fallbackMarathonRecord.completedEntries,
+                total: fallbackMarathonRecord.totalEntries,
+              }
+            : undefined;
         const ov = await overlay(
           this.config,
           {
@@ -1602,13 +1713,8 @@ export class Engine extends EventEmitter {
           undefined,
           publishedAt,
           { offset, total: duration },
-          marathon
-            ? {
-                name: marathon.name,
-                completed: this.store.marathon(marathon.id)?.marathon.completedEntries ?? 0,
-                total: this.store.marathon(marathon.id)?.marathon.totalEntries ?? 0,
-              }
-            : undefined,
+          marathonOverlay,
+          isFallback,
         );
         clipSignal.throwIfAborted();
         if (idle) {
@@ -1717,6 +1823,15 @@ export class Engine extends EventEmitter {
                     this.event(`Marathon started/resumed at entry ${marathon.entry.position + 1}: ${item!.title}`, "info", { marathonId: marathon.id, entryId: marathon.entry.id });
                     this.scheduleOwnedRefill(source, signal);
                   }
+                  if (isFallback && fallbackMedia) {
+                    this.recordFallbackActivation(
+                      fallbackMedia,
+                      this.recoveryIncident(),
+                      `${Date.now()}:${transition}:${child.pid ?? "unknown"}`,
+                    );
+                  } else {
+                    this.clearFallbackStreak(item!);
+                  }
                   const activatedAt = Date.now();
                   this.store.set("health.lastTransitionSuccess", { time: activatedAt, videoId: item!.videoId, title: item!.title, preparationMs });
                   this.store.set("health.lastPlaybackStart", { time: activatedAt, videoId: item!.videoId, title: item!.title, hasAudio, audioSampleRate: audio?.sample_rate ?? null, audioChannels: audio?.channels ?? null });
@@ -1764,13 +1879,8 @@ export class Engine extends EventEmitter {
                         undefined,
                         activePublishedAt,
                         { offset: this.elapsed, total: duration },
-                        marathon
-                          ? {
-                              name: marathon.name,
-                              completed: this.store.marathon(marathon.id)?.marathon.completedEntries ?? 0,
-                              total: this.store.marathon(marathon.id)?.marathon.totalEntries ?? 0,
-                            }
-                          : undefined,
+                        marathonOverlay,
+                        isFallback,
                       ).then(() =>
                         this.event("Restored stale title/date overlay", "warn"),
                       );
@@ -1821,9 +1931,6 @@ export class Engine extends EventEmitter {
           this.emergencyFallback.markPlayed(fallbackMedia.id);
           const incident = this.recoveryIncident();
           if (incident) {
-            incident.consecutiveFallbackCount += 1;
-            incident.currentFallbackId = fallbackMedia.id;
-            this.saveRecoveryIncident(incident);
             const ending = incident.marathonId ? this.store.marathon(incident.marathonId)?.marathon.status === "ending" : false;
             if (ending) {
               incident.status = "cancelled";

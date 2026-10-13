@@ -1876,3 +1876,20 @@ html[data-theme="light"] .fallback-folder-row code, html[data-theme="light"] .fa
   .fallback-folder-row { align-items: stretch; flex-direction: column; }
   .fallback-folder-row .heading-actions { justify-content: flex-start; flex-wrap: wrap; }
 }
+/* Stage 8 persistent fallback warning */
+.fallback-warning-card { padding: 22px; border-color: #a95b4e; background: linear-gradient(105deg, #351c20, #22191c 48%, #181b22); box-shadow: inset 4px 0 #e47964; }
+.fallback-warning-heading { display: flex; align-items: center; gap: 13px; color: #ff9e89; }
+.fallback-warning-heading h2 { margin: 5px 0 0; color: #fff2ef; font-size: 20px; }
+.fallback-warning-card > p { margin: 16px 0; color: #d9c5c1; font-size: 11px; line-height: 1.65; }
+.fallback-warning-facts { display: grid; grid-template-columns: repeat(5,minmax(0,1fr)); gap: 9px; }
+.fallback-warning-facts span { display: grid; min-width: 0; gap: 6px; padding: 11px; border: 1px solid #583238; border-radius: 8px; background: #27191c; }
+.fallback-warning-facts small { color: #c88e83; font-size: 8px; letter-spacing: .07em; }
+.fallback-warning-facts b { overflow: hidden; color: #f6ddd8; font-size: 10px; text-transform: capitalize; text-overflow: ellipsis; white-space: nowrap; }
+.fallback-warning-error { margin-top: 12px; padding: 11px 13px; border: 1px solid #693b3c; border-radius: 7px; background: #2c1719; color: #efaea2; font: 9px/1.55 ui-monospace, monospace; overflow-wrap: anywhere; }
+html[data-theme="light"] .fallback-warning-card { background: linear-gradient(105deg, #fff0ed, #f8f3f2 55%, #edf4f9); border-color: #cc8071; }
+html[data-theme="light"] .fallback-warning-heading h2 { color: #6e2921; }
+html[data-theme="light"] .fallback-warning-card > p { color: #674641; }
+html[data-theme="light"] .fallback-warning-facts span { background: #fff7f5; border-color: #dda99f; }
+html[data-theme="light"] .fallback-warning-facts b { color: #562e29; }
+@media (max-width: 950px) { .fallback-warning-facts { grid-template-columns: repeat(2,minmax(0,1fr)); } }
+@media (max-width: 560px) { .fallback-warning-facts { grid-template-columns: 1fr; } }
