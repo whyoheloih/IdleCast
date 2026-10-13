@@ -1,0 +1,91 @@
+name: Build and publish IdleCast 1.5.1
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/release-1.5.1.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: idlecast-release-1.5.1
+  cancel-in-progress: false
+
+jobs:
+  windows-release:
+    runs-on: windows-latest
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.19.0
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install FFmpeg and yt-dlp
+        shell: pwsh
+        run: |
+          choco install ffmpeg -y --no-progress
+          choco install yt-dlp -y --no-progress
+          $ffmpeg = (Get-Command ffmpeg.exe -ErrorAction Stop).Source
+          $ffprobe = (Get-Command ffprobe.exe -ErrorAction Stop).Source
+          $ytdlp = (Get-Command yt-dlp.exe -ErrorAction Stop).Source
+          "FFMPEG_PATH=$ffmpeg" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "FFPROBE_PATH=$ffprobe" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "YTDLP_PATH=$ytdlp" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "IDLECAST_RELEASE_DIR=$env:GITHUB_WORKSPACE\release" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build installer and portable application
+        run: pnpm desktop:dist
+
+      - name: Verify release files
+        shell: pwsh
+        run: |
+          $files = @(
+            "release/IdleCast-Setup-1.5.1-x64.exe",
+            "release/IdleCast-Setup-1.5.1-x64.exe.blockmap",
+            "release/IdleCast-Portable-1.5.1-x64.exe",
+            "release/latest.yml"
+          )
+          foreach ($file in $files) {
+            if (-not (Test-Path $file -PathType Leaf)) {
+              throw "Required release file was not produced: $file"
+            }
+          }
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $files = @(
+            "release/IdleCast-Setup-1.5.1-x64.exe",
+            "release/IdleCast-Setup-1.5.1-x64.exe.blockmap",
+            "release/IdleCast-Portable-1.5.1-x64.exe",
+            "release/latest.yml"
+          )
+          $notes = @"
+          IdleCast 1.5.1 fixes the Marathon Play YouTube source editor.
+
+          Empty and partial URLs remain editable, backend refreshes preserve unsaved drafts, and source changes apply only after Save & sync succeeds.
+          "@
+          if (gh release view v1.5.1 --repo ${{ github.repository }} 2>$null) {
+            gh release upload v1.5.1 @files --clobber --repo ${{ github.repository }}
+            gh release edit v1.5.1 --title "IdleCast 1.5.1" --notes "$notes" --latest --repo ${{ github.repository }}
+          } else {
+            gh release create v1.5.1 @files --target ${{ github.sha }} --title "IdleCast 1.5.1" --notes "$notes" --latest --repo ${{ github.repository }}
+          }
