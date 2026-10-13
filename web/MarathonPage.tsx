@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { AlertTriangle, CalendarDays, Check, Clock3, FolderOpen, ListVideo, RefreshCw } from "lucide-react";
 import type { Settings } from "../server/config";
 import type { Marathon, MarathonEntry, StoredItem } from "../server/db";
@@ -120,6 +120,25 @@ function combineLocal(date: string, hour: string, minute: string, period: string
   return `${date}T${String(hour24).padStart(2, "0")}:${minute}`;
 }
 
+function persistedYouTubeSource(settings: Settings) {
+  const combined = settings.sources.map((source) => source.value).filter(Boolean).join("\n");
+  if (combined) return combined;
+  return settings.sourceMode === "channel" ? settings.channelUrl : settings.playlistId;
+}
+
+function youtubeSources(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => ({
+      value: entry,
+      kind: (entry.includes("list=") || (/^[A-Za-z0-9_-]+$/.test(entry) && !entry.startsWith("UC"))
+        ? "playlist"
+        : "channel") as "playlist" | "channel",
+    }));
+}
+
 export function MarathonPage({
   settings,
   items,
@@ -138,7 +157,7 @@ export function MarathonPage({
   busy: string;
   current: MarathonRecord | null;
   onChange: (patch: Partial<Settings>) => void;
-  onSaveSource: () => void;
+  onSaveSource: (patch?: Partial<Settings>) => Promise<boolean>;
   onRefresh: () => void;
 }) {
   const [record, setRecord] = useState<MarathonRecord | null>(current);
@@ -158,6 +177,12 @@ export function MarathonPage({
   const [history, setHistory] = useState<MarathonHistory[]>([]);
   const [historyDetail, setHistoryDetail] = useState<MarathonHistoryRecord | null>(null);
   const [confirmEnd, setConfirmEnd] = useState(false);
+  const persistedSource = persistedYouTubeSource(settings);
+  const [youtubeSourceDraft, setYoutubeSourceDraft] = useState(() => persistedSource);
+  const [youtubeSourceBaseline, setYoutubeSourceBaseline] = useState(() => persistedSource);
+  const [youtubeSourceDirty, setYoutubeSourceDirty] = useState(false);
+  const [youtubeSourceConflict, setYoutubeSourceConflict] = useState(false);
+  const sourceEditGeneration = useRef(0);
 
   const selectedLocalTime = combineLocal(selectedDate, hour, minute, period);
   const activeRecord = record && (!current || record.marathon.id === current.marathon.id) ? record : current ?? record;
@@ -189,6 +214,17 @@ export function MarathonPage({
     }
     if (current?.marathon.schedulingMethod) setMethod(current.marathon.schedulingMethod);
   }, [current?.marathon.id, current?.marathon.scheduleUpdatedAt, current?.marathon.status, current?.marathon.currentPosition, current?.marathon.completedEntries]);
+
+  useEffect(() => {
+    if (!youtubeSourceDirty) {
+      setYoutubeSourceDraft(persistedSource);
+      setYoutubeSourceBaseline(persistedSource);
+      setYoutubeSourceConflict(false);
+      return;
+    }
+    if (persistedSource !== youtubeSourceBaseline)
+      setYoutubeSourceConflict(true);
+  }, [persistedSource, youtubeSourceBaseline, youtubeSourceDirty]);
 
   useEffect(() => {
     void refreshDrafts().catch((error) => setProblem(error.message));
@@ -234,6 +270,33 @@ export function MarathonPage({
     }, 250);
     return () => window.clearTimeout(timer);
   }, [marathon?.id, method, selectedLocalTime]);
+
+  const applySource = async () => {
+    if (settings.mediaSource === "local") {
+      await onSaveSource();
+      return;
+    }
+    const sources = youtubeSources(youtubeSourceDraft);
+    if (!sources.length) {
+      setProblem("Enter a YouTube playlist, channel URL, or supported source identifier before saving.");
+      return;
+    }
+    const generation = sourceEditGeneration.current;
+    const normalized = sources.map((source) => source.value).join("\n");
+    setProblem("");
+    const saved = await onSaveSource({ sources });
+    if (!saved) return;
+    if (sourceEditGeneration.current === generation) {
+      setYoutubeSourceDraft(normalized);
+      setYoutubeSourceBaseline(normalized);
+      setYoutubeSourceDirty(false);
+      setYoutubeSourceConflict(false);
+    } else {
+      setYoutubeSourceBaseline(normalized);
+      setYoutubeSourceDirty(true);
+      setMessage("Source saved. Newer text remains in the editor until you save again.");
+    }
+  };
 
   const createSnapshot = async () => {
     setPending("snapshot");
@@ -387,22 +450,28 @@ export function MarathonPage({
               YouTube playlists or channels
               <textarea
                 rows={3}
-                value={settings.sources.map((source) => source.value).join("\n") || (settings.sourceMode === "channel" ? settings.channelUrl : settings.playlistId)}
-                onChange={(event) => onChange({
-                  sources: event.target.value.split("\n").filter((value) => value.trim()).map((value) => ({
-                    value,
-                    kind: (value.includes("list=") || (/^[A-Za-z0-9_-]+$/.test(value) && !value.startsWith("UC")) ? "playlist" : "channel") as "playlist" | "channel",
-                  })),
-                })}
+                value={youtubeSourceDraft}
+                onChange={(event) => {
+                  const value = event.target.value;
+                  sourceEditGeneration.current += 1;
+                  setYoutubeSourceDraft(value);
+                  setYoutubeSourceDirty(value !== youtubeSourceBaseline);
+                }}
                 placeholder={"https://www.youtube.com/playlist?list=…\nhttps://www.youtube.com/@channel"}
               />
-              <span className="hint">Save and sync before creating a snapshot. The snapshot keeps this exact resulting order.</span>
+              <span className="hint">Save and sync before creating a snapshot. Empty and partial text remains untouched while you edit.</span>
+              {youtubeSourceDirty && <span className="hint">Unsaved source changes</span>}
+              {youtubeSourceConflict && <span className="hint bad">The saved source changed elsewhere. Your unsaved text has been preserved.</span>}
             </label>
           )}
           <div className="source-readiness">
             <span><b>Current source</b><small>{sourceLabel}</small></span>
             <span><b>{items.length}</b><small>discovered videos</small></span>
-            <button type="button" onClick={onSaveSource} disabled={!!busy || syncing}>
+            <button
+              type="button"
+              onClick={() => void applySource()}
+              disabled={!!busy || syncing || (settings.mediaSource !== "local" && !youtubeSourceDraft.trim())}
+            >
               <RefreshCw size={15} /> {settings.mediaSource === "local" ? "Save & rescan" : "Save & sync"}
             </button>
           </div>
