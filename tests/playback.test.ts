@@ -243,7 +243,13 @@ test("real FFmpeg loop skips unavailable files, survives one failed output, and 
     duration: 3,
   });
   db.replace([
-    make("missing", "missing00000", 0),
+    {
+      ...make("missing", "missing00000", 0),
+      sourceType: "local",
+      localPath: path.join(root, "missing00000.mp4"),
+      localIdentity: "missing-local-fixture",
+      available: false,
+    },
     make("first", "video000001", 1),
     make("second", "video000002", 2),
     make("third", "video000003", 3),
@@ -328,13 +334,12 @@ test("real FFmpeg loop skips unavailable files, survives one failed output, and 
     const logs = db.logs() as any[];
     assert.ok(
       logs.some((l) => l.message === "Startup buffer ready: 3/3 videos"),
-      "broadcast should start after three prepared videos",
+      JSON.stringify(logs),
     );
-    assert.ok(
-      logs.some((l) =>
-        l.message.startsWith("Media failed while buffering: missing"),
-      ),
-      "missing media should be skipped while filling the startup buffer",
+    assert.equal(
+      logs.some((l) => l.message.includes("-> missing00000")),
+      false,
+      "an unavailable local entry must not become the intended playback owner",
     );
     assert.ok(
       logs.filter((l) => l.message.startsWith("Finished:")).length >= 3,

@@ -22,6 +22,8 @@ test("1080p60 validates, encodes at 60 fps, previews at 1080p and refetches high
   const c = readConfig({
     ADMIN_PASSWORD: "quality-test-password",
     DATA_DIR: root,
+    NORMAL_CACHE_DIR: path.join(root, "cache"),
+    MARATHON_CACHE_DIR: path.join(root, "marathon-cache"),
     EXPERIMENTAL_YOUTUBE: "true",
     FONT_FILE:
       process.platform === "win32"
@@ -95,7 +97,9 @@ test("1080p60 validates, encodes at 60 fps, previews at 1080p and refetches high
       duration: 1,
     };
     let count = 0;
-    const run: typeof runCapture = async (_bin, args) => {
+    const run: typeof runCapture = async (bin, args) => {
+      if (bin === c.FFPROBE_PATH)
+        return JSON.stringify({ streams: [{ codec_type: "video" }], format: { duration: 1 } });
       count++;
       const format = args[args.indexOf("-f") + 1];
       assert.ok(format.includes(count === 1 ? "height<=720" : "height<=1080"));

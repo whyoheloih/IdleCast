@@ -260,16 +260,23 @@ export class LocalMediaSource implements MediaSourceProvider {
     signal.throwIfAborted();
     if (item.sourceType !== "local" || !item.localPath || !item.localIdentity)
       throw new Error("Local media item is missing its persistent path identity");
+    let base: string;
     try {
-      const base = await realpath(path.resolve(this.root));
-      const file = await realpath(item.localPath);
-      const relative = path.relative(base, file);
-      if (relative.startsWith("..") || path.isAbsolute(relative) || !(await stat(file)).isFile())
-        throw new Error("Local media path is outside the selected folder");
-      return file;
+      base = await realpath(path.resolve(this.root));
     } catch (error) {
-      throw new Error(`Local media file missing or external drive disconnected: ${error instanceof Error ? error.message : "unknown error"}`);
+      throw new Error(`Local media folder unavailable or external drive disconnected: ${error instanceof Error ? error.message : "unknown error"}`);
     }
+    let file: string;
+    try {
+      file = await realpath(item.localPath);
+      if (!(await stat(file)).isFile()) throw new Error("path is not a file");
+    } catch (error) {
+      throw new Error(`Local media file missing: ${error instanceof Error ? error.message : "unknown error"}`);
+    }
+    const relative = path.relative(base, file);
+    if (relative.startsWith("..") || path.isAbsolute(relative))
+      throw new Error("Local media path is outside the selected folder");
+    return file;
   }
 }
 export class ExperimentalYouTubeSource implements MediaSourceProvider {
@@ -392,6 +399,7 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
     let finalAttempt = 0;
     let usePublicClients = !this.c.YTDLP_COOKIES_FILE || this.cookiesRejected;
     let retryImmediately = false;
+    let publicStrategyAttempt = usePublicClients ? 1 : 0;
     for (let attempt = 1; attempt <= 3; attempt++) {
       signal.throwIfAborted();
       const effectiveAttempt = this.hooks.onAttempt?.(item) ?? attempt;
@@ -406,12 +414,16 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
       }
       await this.cleanup(root, item.videoId);
       try {
+        const strategyAttempt = usePublicClients
+          ? Math.max(1, publicStrategyAttempt++)
+          : effectiveAttempt;
         const file = await this.downloadAttempt(
           root,
           item,
           cacheLimit,
           perVideoLimit,
           effectiveAttempt,
+          strategyAttempt,
           signal,
           usePublicClients,
         );
@@ -458,6 +470,7 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
     cacheLimit: number,
     perVideoLimit: number,
     attempt: number,
+    strategyAttempt: number,
     signal: AbortSignal,
     usePublicClients = false,
   ) {
@@ -465,8 +478,8 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
     let lastBytes = 0;
     let lastPercent = -1;
     this.hooks.onDownload?.(this.activity(item, "downloading", 0, attempt, { phase: "resolving" }));
-    const publicClient = attempt % 3 === 0 ? "ios,web_embedded" : attempt % 2 === 0 ? "tv,web_embedded" : "android_vr,web_embedded";
-    const formatSelector = attempt % 4 === 0
+    const publicClient = strategyAttempt % 3 === 0 ? "ios,web_embedded" : strategyAttempt % 2 === 0 ? "tv,web_embedded" : "android_vr,web_embedded";
+    const formatSelector = strategyAttempt % 4 === 0
       ? "b[height<=" + this.quality.height + "]/bv*[height<=" + this.quality.height + "]+ba"
       : "bv*[height<=" + this.quality.height + "]+ba/b[height<=" + this.quality.height + "]";
     await this.run(

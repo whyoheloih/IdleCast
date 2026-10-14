@@ -49,7 +49,7 @@ export function countsTowardFailureHistory(message: string) {
 }
 
 export function pausesDownloadQueue(message: string) {
-  return /account verification|rate limit|media disk is full|required media executable|executable path|cache storage is unavailable|local media folder unavailable|external drive disconnected|local media file missing/i.test(
+  return /account verification|rate limit|media disk is full|required media executable|executable path|cache storage is unavailable|local media folder unavailable|external drive disconnected/i.test(
     message,
   );
 }
@@ -2051,6 +2051,10 @@ export class Engine extends EventEmitter {
           consumed = false;
           const preparedKey = marathon ? item.id : item.videoId;
           this.preparedMedia.delete(preparedKey);
+          this.bufferedIds.delete(item.videoId);
+          this.downloadStates.delete(item.videoId);
+          this.cachedSizes.delete(item.videoId);
+          this.bufferedCount = this.bufferedIds.size;
           if (item.sourceType !== "local") await source.remove?.(item.videoId).catch(() => {});
           if (marathon) {
             try { this.store.interruptMarathonEntry(marathon.id, marathon.entry.id, message); }

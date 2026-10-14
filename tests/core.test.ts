@@ -223,15 +223,26 @@ test("SQLite migration, atomic replacement, failure preservation, cursor and res
 test("local source enforces identifier containment and missing-media errors", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "idlecast-source-"));
   try {
-    await writeFile(path.join(root, "abcdefghijk.mp4"), "fixture");
+    const file = path.join(root, "abcdefghijk.mp4");
+    await writeFile(file, "fixture");
     const p = new LocalMediaSource(root);
     assert.equal(
-      await p.resolve(item(), new AbortController().signal),
-      path.join(root, "abcdefghijk.mp4"),
+      await p.resolve({
+        ...item(),
+        sourceType: "local",
+        localPath: file,
+        localIdentity: "local-fixture",
+      }, new AbortController().signal),
+      file,
     );
     await assert.rejects(
       p.resolve(
-        { ...item(), videoId: "../outside" },
+        {
+          ...item(),
+          sourceType: "local",
+          localPath: path.resolve(root, "..", "outside.mp4"),
+          localIdentity: "outside-fixture",
+        },
         new AbortController().signal,
       ),
     );

@@ -3,6 +3,18 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.5.4",
+    date: "Oct 13, 2026",
+    title: "Playback recovery and full verification",
+    items: [
+      "Failed prepared media is removed from every buffer ownership map before recovery, preventing broken files from remaining marked ready",
+      "A missing individual local file no longer pauses the entire local queue, while a disconnected folder or drive still pauses safely",
+      "Cookie rejection retries begin with the stable public YouTube client before rotating through alternate recovery clients",
+      "Downloader tests use isolated temporary caches and FFprobe-aware fixtures instead of touching configured user media folders",
+      "All 27 automated tests, the production build, and the browser functionality workflow pass",
+    ],
+  },
+  {
     version: "1.5.3",
     date: "Oct 13, 2026",
     title: "Series detector build repair",

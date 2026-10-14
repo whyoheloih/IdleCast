@@ -26,6 +26,8 @@ test("deterministic downloader failures skip pointless retries", async () => {
   const c = readConfig({
     ADMIN_PASSWORD: "test-password-long-enough",
     DATA_DIR: root,
+    NORMAL_CACHE_DIR: path.join(root, "cache"),
+    MARATHON_CACHE_DIR: path.join(root, "marathon-cache"),
     EXPERIMENTAL_YOUTUBE: "true",
   });
   let calls = 0;
@@ -64,14 +66,18 @@ test("stale authenticated cookies fall back to public YouTube clients", async ()
   const c = readConfig({
     ADMIN_PASSWORD: "test-password-long-enough",
     DATA_DIR: root,
+    NORMAL_CACHE_DIR: path.join(root, "cache"),
+    MARATHON_CACHE_DIR: path.join(root, "marathon-cache"),
     EXPERIMENTAL_YOUTUBE: "true",
     YTDLP_COOKIES_FILE: cookieFile,
   });
   const calls: string[][] = [];
   const source = new ExperimentalYouTubeSource(c, async (
-    _binary,
+    binary,
     args,
   ) => {
+    if (binary === c.FFPROBE_PATH)
+      return JSON.stringify({ streams: [{ codec_type: "video" }], format: { duration: 10 } });
     calls.push(args);
     if (calls.length === 1)
       throw new Error("YouTube requires account verification for this request");
@@ -135,6 +141,8 @@ test("experimental adapter reports progress, retains five videos, deletes comple
   const c = readConfig({
     ADMIN_PASSWORD: "test-password-long-enough",
     DATA_DIR: root,
+    NORMAL_CACHE_DIR: path.join(root, "cache"),
+    MARATHON_CACHE_DIR: path.join(root, "marathon-cache"),
     EXPERIMENTAL_YOUTUBE: "true",
     YTDLP_COOKIES_FILE: path.join(root, "youtube-cookies.txt"),
   });
@@ -145,7 +153,9 @@ test("experimental adapter reports progress, retains five videos, deletes comple
   const deleted: string[] = [];
   const source = new ExperimentalYouTubeSource(
     c,
-    async (_binary, args, signal, _timeout, _check, onOutput) => {
+    async (binary, args, signal, _timeout, _check, onOutput) => {
+      if (binary === c.FFPROBE_PATH)
+        return JSON.stringify({ streams: [{ codec_type: "video" }], format: { duration: 5 } });
       calls++;
       active++;
       maxActive = Math.max(maxActive, active);
@@ -247,6 +257,8 @@ test("download accounting excludes retained files and reserves half the cache pe
   const c = readConfig({
     ADMIN_PASSWORD: "test-password-long-enough",
     DATA_DIR: root,
+    NORMAL_CACHE_DIR: cache,
+    MARATHON_CACHE_DIR: path.join(root, "marathon-cache"),
     CACHE_MAX_MB: "100",
     EXPERIMENTAL_YOUTUBE: "true",
   });
@@ -254,7 +266,9 @@ test("download accounting excludes retained files and reserves half the cache pe
   let seenArgs: string[] = [];
   const source = new ExperimentalYouTubeSource(
     c,
-    async (_binary, args, _signal, _timeout, check, onOutput) => {
+    async (binary, args, _signal, _timeout, check, onOutput) => {
+      if (binary === c.FFPROBE_PATH)
+        return JSON.stringify({ streams: [{ codec_type: "video" }], format: { duration: 10 } });
       seenArgs = args;
       const template = args[args.indexOf("-o") + 1];
       await writeFile(template.replace("%(ext)s", "part"), "1234567890");

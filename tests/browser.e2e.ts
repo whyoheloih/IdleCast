@@ -81,7 +81,7 @@ try {
   });
   await page.getByRole("button", { name: "Playlist", exact: true }).click();
   await page.getByText("Test playlist video 1", { exact: true }).waitFor();
-  await page.getByRole("button", { name: /Filters/ }).click();
+  await page.getByRole("main").getByRole("button", { name: "Filters", exact: true }).click();
   await page.getByText("Queue filters", { exact: true }).waitFor();
   assert.equal(
     await page
@@ -145,6 +145,8 @@ try {
     .locator(".virtual-list")
     .evaluate((el) => (el.scrollTop = el.scrollHeight));
   await page.getByText("Test playlist video 1000", { exact: true }).waitFor();
+  await page.getByLabel("Filters", { exact: true }).click();
+  await page.getByRole("heading", { name: "Marathon Play", exact: true }).first().waitFor();
   await page.getByRole("button", { name: "History", exact: true }).click();
   await page.getByRole("heading", { name: "Playback history" }).waitFor();
   await page.getByText("No playback yet.", { exact: true }).waitFor();
