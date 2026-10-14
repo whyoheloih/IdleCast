@@ -3,6 +3,15 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.5.3",
+    date: "Oct 13, 2026",
+    title: "Series detector build repair",
+    items: [
+      "The exact-format series metadata is now stripped through an explicitly typed internal queue entry so the Windows application compiles successfully",
+      "Includes the v1.5.2 series recognition and ascending continuation improvements",
+    ],
+  },
+  {
     version: "1.5.2",
     date: "Oct 13, 2026",
     title: "Reliable series continuation detection",

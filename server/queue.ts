@@ -422,10 +422,12 @@ export function prepareQueue(
 
   const flattened = blocks.flat();
   return {
-    items: flattened.map(({ _seriesExplicit: _ignored, ...item }, position) => ({
-      ...item,
-      position,
-    })),
+    items: flattened.map((entry, position) => {
+      const { _seriesExplicit: _ignored, ...item } = entry as PlaylistItem & {
+        _seriesExplicit?: boolean;
+      };
+      return { ...item, position };
+    }),
     excluded: items.length - flattened.length,
     reasons,
     detectedSeries: new Set(
