@@ -266,6 +266,10 @@ test("media child cancellation and capped reconnect backoff", async () => {
     runCapture("idlecast-no-such-binary", [], new AbortController().signal),
     /could not start/,
   );
+  await assert.rejects(
+    runCapture(process.execPath, ["-e", "process.stderr.write(\"Cannot find file at ../lib/yt-dlp/tools/x64/yt-dlp.exe. This usually indicates a missing or moved file.\"); process.exit(1)"], new AbortController().signal),
+    /Packaged yt-dlp runtime is missing/,
+  );
   const largeOutput = await runCapture(
     process.execPath,
     ["-e", "process.stdout.write('x'.repeat(1200000))"],

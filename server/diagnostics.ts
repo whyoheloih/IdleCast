@@ -54,6 +54,7 @@ export const DIAGNOSTIC_REGISTRY = {
   "IC-DL-011": d("IC-DL-011", "YOUTUBE_MEDIA_HTTP_429", "Downloads", "critical", "YouTube rate-limited media requests with HTTP 429.", "yt-dlp output contains HTTP 429 or Too Many Requests.", ["server/providers.ts", "server/process.ts"], ["request rate", "YouTube cooldown", "IP rate limits"]),
   "IC-DL-012": d("IC-DL-012", "FRAGMENT_RETRIES_EXHAUSTED", "Downloads", "critical", "yt-dlp exhausted retries for one or more media fragments.", "yt-dlp reports exhausted fragment retries or an unrecoverable fragment download failure.", ["server/providers.ts", "server/process.ts"], ["fragment host", "network reliability", "fragment retry settings"]),
   "IC-DL-013": d("IC-DL-013", "DOWNLOAD_RETRIES_EXHAUSTED", "Downloads", "critical", "All bounded Idlecast download attempts failed for the current video.", "ExperimentalYouTubeSource finishes its final allowed attempt without a usable file.", ["server/providers.ts", "server/engine.ts"], ["preceding specific diagnostic", "attempt count", "video ID"]),
+  "IC-DL-014": d("IC-DL-014", "YTDLP_PACKAGED_RUNTIME_MISSING", "Downloads", "critical", "The packaged yt-dlp launcher could not find its real executable payload.", "yt-dlp stderr reports that its referenced executable is missing or was moved.", ["scripts/prepare-desktop.mjs", "desktop/main.mjs", ".github/workflows/release-1.6.4.yml"], ["bundled yt-dlp executable", "Chocolatey shim resolution", "desktop release contents"]),
 
   "IC-CACHE-001": d("IC-CACHE-001", "CACHE_CAPACITY_EXCEEDED", "Media cache", "critical", "The rolling media cache exceeded its configured total capacity.", "Cache monitoring reports total bytes greater than CACHE_MAX_MB.", ["server/providers.ts", "server/health.ts"], ["cache contents", "retained videos", "CACHE_MAX_MB"]),
   "IC-CACHE-002": d("IC-CACHE-002", "MEDIA_EXCEEDS_PER_VIDEO_LIMIT", "Media cache", "warning", "One video exceeded the per-video cache budget.", "Active media bytes exceed half of the configured total cache budget or yt-dlp reports max-filesize.", ["server/providers.ts"], ["video size", "quality setting", "cache budget"]),
@@ -249,6 +250,7 @@ const matchers: Array<[DiagnosticCode, RegExp]> = [
   ["IC-DL-009", /download produced no merged media/i],
   ["IC-DL-008", /yt-dlp unexpectedly exited non-zero/i],
   ["IC-DL-013", /download failed after/i],
+  ["IC-DL-014", /packaged yt-dlp runtime is missing/i],
   ["IC-AUTH-002", /cookies rejected|account verification/i],
   ["IC-AUTH-003", /sign in|login required/i],
   ["IC-CACHE-005", /downloaded media validation failed/i],

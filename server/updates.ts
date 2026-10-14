@@ -3,6 +3,16 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.6.4",
+    date: "Oct 14, 2026",
+    title: "Packaged downloader repair",
+    items: [
+      "Windows releases bundle the real standalone yt-dlp executable instead of Chocolatey's path-dependent launcher shim",
+      "Release packaging now rejects yt-dlp binaries that cannot execute and verifies the bundled runtime before publishing",
+      "A missing packaged yt-dlp payload reports the specific IC-DL-014 diagnostic rather than generic IC-DL-008",
+    ],
+  },
+  {
     version: "1.6.3",
     date: "Oct 14, 2026",
     title: "Synced playlist length",

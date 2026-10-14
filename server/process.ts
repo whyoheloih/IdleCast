@@ -2,6 +2,8 @@ import { spawn, type ChildProcess } from "node:child_process";
 const diagnostics = new WeakMap<ChildProcess, string>();
 export function mediaFailure(child: ChildProcess): string {
   const text = diagnostics.get(child) ?? "";
+  if (/(?:Cannot find file at .*yt-dlp|yt-dlp.*missing or moved file)/i.test(text))
+    return "Packaged yt-dlp runtime is missing; reinstall or update IdleCast";
   if (/ffmpeg-location.*does not exist|ffmpeg is not installed/i.test(text))
     return "FFmpeg location is invalid; audio and video could not be merged";
   if (/javascript challenge|signature extraction|nsig|js runtime/i.test(text))
