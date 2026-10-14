@@ -8,6 +8,9 @@ import {
   detectSeries,
   estimatedDownloadGb,
   prepareQueue,
+  canStartSeriesBlock,
+  seriesStateAfterActivation,
+  SERIES_BLOCK_GAP,
 } from "../server/queue.js";
 import { YouTubePlaylistProvider } from "../server/providers.js";
 import { Store } from "../server/db.js";
@@ -242,4 +245,57 @@ test("custom filters group numbered series, override content limits, and preserv
     estimatedDownloadGb(queue.items[1], settings)! >
       estimatedDownloadGb(queue.items[0], settings)!,
   );
+});
+
+test("series blocks override long adjacency and require five ordinary videos between blocks", () => {
+  const make = (id: string, title: string, duration = 300) => ({
+    id,
+    videoId: id.padEnd(11, "0").slice(0, 11),
+    position: Number(id.replace(/\D/g, "")) || 0,
+    title,
+    channel: "Test",
+    thumbnail: "",
+    available: true,
+    duration,
+    publishedAt: "2026-01-01T00:00:00Z",
+  });
+  const settings = settingsSchema.parse({
+    ...defaults,
+    shuffle: true,
+    filters: {
+      ...defaults.filters,
+      seriesMode: "strict",
+      seriesLimit: 3,
+    },
+  });
+  const queue = prepareQueue([
+    make("a1", "First | Alpha Series [1]", 1_500),
+    make("a2", "Second | Alpha Series [2]", 1_500),
+    make("a3", "Third | Alpha Series [3]", 1_500),
+    make("b1", "First | Beta Series [1]", 1_500),
+    make("b2", "Second | Beta Series [2]", 1_500),
+    make("b3", "Third | Beta Series [3]", 1_500),
+    ...Array.from({ length: 7 }, (_, index) =>
+      make(`o${index + 1}`, `Ordinary ${index + 1}`),
+    ),
+  ], settings, () => 0).items;
+  const seriesStarts = queue
+    .map((item, index) => item.seriesKey && queue[index - 1]?.seriesKey !== item.seriesKey ? index : -1)
+    .filter((index) => index >= 0);
+  assert.equal(seriesStarts.length, 2);
+  assert.equal(seriesStarts[1] - (seriesStarts[0] + 3), SERIES_BLOCK_GAP);
+  assert.deepEqual(
+    queue.slice(seriesStarts[0], seriesStarts[0] + 3).map((item) => item.seriesIndex),
+    [1, 2, 3],
+  );
+
+  let state = seriesStateAfterActivation(queue[seriesStarts[0]], "", SERIES_BLOCK_GAP, 0);
+  state = seriesStateAfterActivation(queue[seriesStarts[0] + 1], state.activeSeriesKey, state.ordinaryVideosSinceSeries, state.activeSeriesDuration);
+  state = seriesStateAfterActivation(queue[seriesStarts[0] + 2], state.activeSeriesKey, state.ordinaryVideosSinceSeries, state.activeSeriesDuration);
+  assert.equal(state.activeSeriesDuration, 4_500);
+  assert.equal(canStartSeriesBlock(queue[seriesStarts[1]], state.activeSeriesKey, state.ordinaryVideosSinceSeries), false);
+  for (const ordinary of queue.slice(seriesStarts[0] + 3, seriesStarts[1]))
+    state = seriesStateAfterActivation(ordinary, state.activeSeriesKey, state.ordinaryVideosSinceSeries, state.activeSeriesDuration);
+  assert.equal(state.ordinaryVideosSinceSeries, SERIES_BLOCK_GAP);
+  assert.equal(canStartSeriesBlock(queue[seriesStarts[1]], state.activeSeriesKey, state.ordinaryVideosSinceSeries), true);
 });

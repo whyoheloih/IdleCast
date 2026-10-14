@@ -69,3 +69,42 @@ Select Local files in Settings and put VIDEO_ID.mp4 (or .mkv/.webm/.mov) in medi
 - [FFmpeg formats, tee and UDP output](https://ffmpeg.org/ffmpeg-formats.html)
 - [Twitch broadcasting](https://dev.twitch.tv/docs/video-broadcast/)
 - [yt-dlp installation and supported runtimes](https://github.com/yt-dlp/yt-dlp/wiki/Installation)
+
+## Queue readiness and recovery visibility
+
+The Overview page separates files that merely exist from entries that are validated and owned by the active playback buffer. A blocked entry shows its diagnostic code and last useful error. Recent recovery summaries retain the intended title, source mode, attempt count, fallback coverage, observed failure, outcome, and elapsed incident time.
+
+IdleCast also groups repeated systemic failures into durable recovery circuits. Three related failures within ten minutes pause equivalent work for a bounded cooldown. The first cooldown is five minutes and repeated openings grow to at most thirty minutes. Prepared playback, Emergency Fallback, or standby output remains active during the pause. A successful media preparation clears the circuit.
+
+## Backup and restore
+
+Stop IdleCast before using either command. Backups include settings, playlist order and metadata, playback history, Marathon snapshots and history, play counts, diagnostics, fallback catalog/history, and recovery summaries. They exclude passwords, API keys, stream keys, encrypted credentials, and login sessions.
+
+Create a timestamped backup under data/backups:
+
+    pnpm backup
+
+Choose a destination:
+
+    pnpm backup -- "E:\IdleCast Backups\station.json"
+
+Restore requires the backup path and explicit confirmation. IdleCast creates a pre-restore safety backup before changing stored state:
+
+    pnpm restore -- "E:\IdleCast Backups\station.json" --confirm
+
+Restart IdleCast after restore.
+
+## Long-duration playback soak
+
+The soak command runs the real Engine and FFmpeg transition pipeline with eight looping clips, a deliberately failed output process, and an injected recoverable source timeout. It uses an isolated temporary database and media directories and never reads or modifies the configured station library.
+
+The default duration is twelve hours:
+
+    pnpm test:soak
+
+Set a shorter or longer duration in seconds:
+
+    $env:IDLECAST_SOAK_SECONDS=86400
+    pnpm test:soak
+
+The command reports completed videos, transitions, output starts, and process memory every minute. It fails if real transitions or output-supervisor recovery are not observed.

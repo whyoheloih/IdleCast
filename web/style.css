@@ -1978,3 +1978,44 @@ html[data-theme="light"] .error-explanation-grid pre { background: #fff; border-
   .error-explanation-grid .error-wide { grid-column: 1; }
   .error-actions { align-items: stretch; flex-direction: column; }
 }
+
+/* Queue readiness, circuit breaker, and recovery summaries */
+.circuit-status-card { display:flex; align-items:flex-start; gap:14px; padding:18px 20px; border-color:#8b6430; background:linear-gradient(100deg,#2b2115,#191c22); color:#e9bd72; }
+.circuit-status-card h2 { margin:5px 0 7px; color:#f2dfba; font-size:16px; text-transform:capitalize; }
+.circuit-status-card p { margin:0; color:#b6aa94; font-size:10px; line-height:1.6; }
+.circuit-status-card small { display:block; margin-top:8px; color:#cf9f7c; font:9px/1.5 ui-monospace,monospace; overflow-wrap:anywhere; }
+.queue-readiness-card { overflow:hidden; }
+.queue-readiness-card.readiness-ready { border-color:#315b43; }
+.queue-readiness-card.readiness-blocked { border-color:#794149; }
+.readiness-total { display:grid; min-width:76px; gap:4px; text-align:right; }
+.readiness-total b { color:#8bd7a5; font-size:18px; }
+.readiness-blocked .readiness-total b { color:#ef8d94; }
+.readiness-total small { color:#87929e; font-size:8px; letter-spacing:.08em; text-transform:uppercase; }
+.readiness-list { display:grid; border-top:1px solid #2d333c; }
+.readiness-row { display:grid; grid-template-columns:26px minmax(0,1fr) auto; align-items:center; gap:12px; min-height:52px; padding:9px 18px; border-top:1px solid #292f38; }
+.readiness-row:first-child { border-top:0; }
+.readiness-row > span { color:#687482; font-size:9px; }
+.readiness-row > div { display:grid; min-width:0; gap:4px; }
+.readiness-row b { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10px; }
+.readiness-row small { overflow:hidden; color:#84909c; font-size:8px; text-overflow:ellipsis; white-space:nowrap; }
+.readiness-state { padding:5px 8px; border:1px solid #3e4854; border-radius:5px; color:#a7b3c0; font-size:8px; text-transform:uppercase; }
+.readiness-state.state-downloaded { border-color:#3b6c4c; color:#8bd7a5; }
+.readiness-state.state-failed, .readiness-state.state-error { border-color:#744047; color:#ef8d94; }
+.readiness-empty { margin:0; padding:20px; color:#7e8995; font-size:10px; }
+.recovery-summary-card { overflow:hidden; }
+.recovery-summary-list details { border-top:1px solid #2c323b; }
+.recovery-summary-list summary { display:grid; grid-template-columns:minmax(0,1fr) auto auto; align-items:center; gap:18px; padding:14px 18px; cursor:pointer; }
+.recovery-summary-list summary > span:first-child { display:grid; min-width:0; gap:4px; }
+.recovery-summary-list summary b { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10px; }
+.recovery-summary-list summary small, .recovery-summary-list summary > span:last-child { color:#82909d; font-size:8px; }
+.recovery-summary-list summary strong { color:#8bd7a5; font-size:9px; text-transform:capitalize; }
+.recovery-summary-list details > div { padding:13px 18px 17px; background:#15191f; }
+.recovery-summary-list p { margin:5px 0; color:#99a4af; font-size:9px; line-height:1.5; overflow-wrap:anywhere; }
+html[data-theme="light"] .circuit-status-card { background:linear-gradient(100deg,#fff5df,#eef5fa); border-color:#c7a365; }
+html[data-theme="light"] .readiness-list, html[data-theme="light"] .readiness-row, html[data-theme="light"] .recovery-summary-list details { border-color:#c8d6e1; }
+html[data-theme="light"] .recovery-summary-list details > div { background:#eef5fa; }
+@media (max-width:700px) {
+  .recovery-summary-list summary { grid-template-columns:1fr; gap:7px; }
+  .readiness-row { grid-template-columns:22px minmax(0,1fr); }
+  .readiness-state { grid-column:2; justify-self:start; }
+}

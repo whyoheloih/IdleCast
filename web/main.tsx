@@ -107,6 +107,24 @@ type Snapshot = {
     attempts: number;
     needsAttention: boolean;
   };
+  queueReadiness: {
+    status: "ready" | "preparing" | "blocked" | "empty";
+    ready: number;
+    target: number;
+    blocked: number;
+    entries: Array<{
+      id: string; title: string; status: string; percent: number | null;
+      diagnosticCode: string | null; error: string | null;
+    }>;
+  };
+  recoveryCircuit: {
+    kind: string; failures: number; openUntil: number; lastError: string;
+  } | null;
+  recoverySummaries: Array<{
+    id: string; intendedTitle: string; sourceType: "youtube" | "local";
+    outcome: string; attempts: number; originalFailure: string; lastError: string;
+    fallbackCount: number; startedAt: number; completedAt: number | null; durationMs: number | null;
+  }>;
   emergencyFallback: {
     directory: string;
     available: boolean;
@@ -683,6 +701,43 @@ function App() {
                 {state.recovery.lastError && <p className="recovery-error">{state.recovery.lastError}</p>}
               </section>
             )}
+            {state?.recoveryCircuit && (
+              <section className="panel circuit-status-card" role="status">
+                <AlertTriangle size={22} />
+                <div>
+                  <span className="eyebrow">AUTOMATIC RETRY PROTECTION</span>
+                  <h2>{state.recoveryCircuit.kind.replace("-", " ")} retries are cooling down</h2>
+                  <p>
+                    IdleCast detected {state.recoveryCircuit.failures} related failures and paused equivalent work until{" "}
+                    {new Date(state.recoveryCircuit.openUntil).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}.
+                    Playback remains on prepared, fallback, or standby output.
+                  </p>
+                  <small>{state.recoveryCircuit.lastError}</small>
+                </div>
+              </section>
+            )}
+            <section className={"panel queue-readiness-card readiness-" + (state?.queueReadiness?.status ?? "empty")}>
+              <div className="panel-heading">
+                <div>
+                  <span className="eyebrow">NEXT VIDEOS</span>
+                  <h2>Queue readiness</h2>
+                  <p>Downloaded means present on disk; ready means validated and owned by the playback buffer.</p>
+                </div>
+                <span className="readiness-total">
+                  <b>{state?.queueReadiness?.ready ?? 0} / {state?.queueReadiness?.target ?? 0}</b>
+                  <small>{state?.queueReadiness?.status ?? "empty"}</small>
+                </span>
+              </div>
+              <div className="readiness-list">
+                {state?.queueReadiness?.entries?.length ? state.queueReadiness.entries.map((entry, index) => (
+                  <div className="readiness-row" key={entry.id}>
+                    <span>{index + 1}</span>
+                    <div><b>{entry.title}</b><small>{entry.diagnosticCode ? entry.diagnosticCode + " · " : ""}{entry.error ?? entry.status}</small></div>
+                    <strong className={"readiness-state state-" + entry.status}>{entry.status}</strong>
+                  </div>
+                )) : <p className="readiness-empty">Start or prepare playback to build the validated queue.</p>}
+              </div>
+            </section>
             {settings && <YouTubeViewer videoId={settings.youtubeWatchId} onSaved={id=>setSettings(s=>s?{...s,youtubeWatchId:id}:s)} />}
             <div className="overview-grid">
               <section className="panel playout">
@@ -873,6 +928,33 @@ function App() {
                 </div>
               </section>
             </div>
+            {!!state?.recoverySummaries?.length && (
+              <section className="panel recovery-summary-card">
+                <div className="panel-heading">
+                  <div>
+                    <span className="eyebrow">RECOVERY HISTORY</span>
+                    <h2>What IdleCast recovered from</h2>
+                    <p>Each incident records the intended video, fallback coverage, attempts, and final result.</p>
+                  </div>
+                </div>
+                <div className="recovery-summary-list">
+                  {state.recoverySummaries.slice(0, 5).map((summary) => (
+                    <details key={summary.id}>
+                      <summary>
+                        <span><b>{summary.intendedTitle}</b><small>{new Date(summary.startedAt).toLocaleString()}</small></span>
+                        <strong>{summary.outcome}</strong>
+                        <span>{summary.fallbackCount} fallback · {summary.attempts} attempt{summary.attempts === 1 ? "" : "s"}</span>
+                      </summary>
+                      <div>
+                        <p><b>Observed problem:</b> {summary.originalFailure}</p>
+                        {summary.lastError && <p><b>Final detail:</b> {summary.lastError}</p>}
+                        <p><b>Source:</b> {summary.sourceType === "local" ? "Local Files Only" : "YouTube"} · <b>Duration:</b> {summary.durationMs === null ? "Unfinished" : Math.max(1, Math.round(summary.durationMs / 1000)) + " seconds"}</p>
+                      </div>
+                    </details>
+                  ))}
+                </div>
+              </section>
+            )}
             <section className="panel">
               <div className="panel-heading">
                 <h2>Coming up in your playlist</h2>

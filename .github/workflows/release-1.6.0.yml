@@ -1,18 +1,18 @@
-name: Build and publish IdleCast 1.5.4
+name: Build and publish IdleCast 1.6.0
 
 on:
   push:
     branches:
       - main
     paths:
-      - .github/workflows/release-1.5.4.yml
+      - .github/workflows/release-1.6.0.yml
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: idlecast-release-1.5.4
+  group: idlecast-release-1.6.0
   cancel-in-progress: false
 
 jobs:
@@ -56,9 +56,9 @@ jobs:
         shell: pwsh
         run: |
           $files = @(
-            "release/IdleCast-Setup-1.5.4-x64.exe",
-            "release/IdleCast-Setup-1.5.4-x64.exe.blockmap",
-            "release/IdleCast-Portable-1.5.4-x64.exe",
+            "release/IdleCast-Setup-1.6.0-x64.exe",
+            "release/IdleCast-Setup-1.6.0-x64.exe.blockmap",
+            "release/IdleCast-Portable-1.6.0-x64.exe",
             "release/latest.yml"
           )
           foreach ($file in $files) {
@@ -73,19 +73,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $files = @(
-            "release/IdleCast-Setup-1.5.4-x64.exe",
-            "release/IdleCast-Setup-1.5.4-x64.exe.blockmap",
-            "release/IdleCast-Portable-1.5.4-x64.exe",
+            "release/IdleCast-Setup-1.6.0-x64.exe",
+            "release/IdleCast-Setup-1.6.0-x64.exe.blockmap",
+            "release/IdleCast-Portable-1.6.0-x64.exe",
             "release/latest.yml"
           )
           $notes = @"
-          IdleCast 1.5.4 improves playback recovery and completes full functionality verification.
+          IdleCast 1.6.0 adds queue readiness, bounded recovery circuits, recovery summaries, safe backup and restore commands, a long-duration playback soak tool, and five-video spacing between Series Continuing blocks.
 
           Failed prepared media is fully evicted, individual missing local files no longer block later playable entries, cookie fallback starts with the stable public client, and the complete automated and browser workflows pass.
           "@
-          if (gh release view v1.5.4 --repo ${{ github.repository }} 2>$null) {
-            gh release upload v1.5.4 @files --clobber --repo ${{ github.repository }}
-            gh release edit v1.5.4 --title "IdleCast 1.5.4" --notes "$notes" --latest --repo ${{ github.repository }}
+          if (gh release view v1.6.0 --repo ${{ github.repository }} 2>$null) {
+            gh release upload v1.6.0 @files --clobber --repo ${{ github.repository }}
+            gh release edit v1.6.0 --title "IdleCast 1.6.0" --notes "$notes" --latest --repo ${{ github.repository }}
           } else {
-            gh release create v1.5.4 @files --target ${{ github.sha }} --title "IdleCast 1.5.4" --notes "$notes" --latest --repo ${{ github.repository }}
+            gh release create v1.6.0 @files --target ${{ github.sha }} --title "IdleCast 1.6.0" --notes "$notes" --latest --repo ${{ github.repository }}
           }

@@ -70,6 +70,33 @@ export type StoredItem = PlaylistItem & {
   seriesIndex: number | null;
   liveStatus: "none" | "live" | "upcoming" | "past";
 };
+export type IdleCastBackup = {
+  format: "idlecast-backup";
+  formatVersion: 1;
+  createdAt: number;
+  applicationVersion: string;
+  kv: Array<{ key: string; value: string }>;
+  tables: {
+    items: Record<string, unknown>[];
+    playback_history: Record<string, unknown>[];
+    marathons: Record<string, unknown>[];
+    marathon_entries: Record<string, unknown>[];
+  };
+};
+
+const backupKvKeys = new Set([
+  "settings", "cursor", "lastSync", "excludedCount", "filterStats",
+  "uploadDates", "playCounts", "shuffleNeedsShortStart", "shuffleShortStartsRemaining",
+  "lastVideoDuration", "lastVideoSeries", "activeSeriesBlockKey",
+  "ordinaryVideosSinceSeries", "activeSeriesBlockDuration", "localCatalogOrder", "youtubeMetadata",
+  "diagnostics", "diagnostics.totalErrorOccurrences", "diagnostics.unreadCount",
+  "diagnostics.lastViewedAt", "emergencyFallbackCatalog", "emergencyFallbackLastScan",
+  "recoveryIncidentHistory", "recoveryAttemptLedger", "fallbackStreak",
+  "marathonNormalHandoff", "recoveryCircuitBreakers",
+]);
+
+const backupTables = ["items", "playback_history", "marathons", "marathon_entries"] as const;
+
 export class Store {
   db: DatabaseSync;
   constructor(filename: string) {
@@ -206,6 +233,66 @@ export class Store {
   }
   settings(): Settings {
     return settingsSchema.parse(this.get("settings", defaults));
+  }
+  exportBackup(applicationVersion: string): IdleCastBackup {
+    const kv = (this.db.prepare("SELECT key,value FROM kv ORDER BY key").all() as Array<{ key: string; value: string }>)
+      .filter((row) => backupKvKeys.has(row.key));
+    return {
+      format: "idlecast-backup",
+      formatVersion: 1,
+      createdAt: Date.now(),
+      applicationVersion,
+      kv,
+      tables: {
+        items: this.db.prepare("SELECT * FROM items ORDER BY position,id").all() as Record<string, unknown>[],
+        playback_history: this.db.prepare("SELECT * FROM playback_history ORDER BY id").all() as Record<string, unknown>[],
+        marathons: this.db.prepare("SELECT * FROM marathons ORDER BY createdAt,id").all() as Record<string, unknown>[],
+        marathon_entries: this.db.prepare("SELECT * FROM marathon_entries ORDER BY marathonId,position,id").all() as Record<string, unknown>[],
+      },
+    };
+  }
+  restoreBackup(value: unknown) {
+    if (!value || typeof value !== "object") throw new Error("Backup file is not a JSON object");
+    const backup = value as Partial<IdleCastBackup>;
+    if (backup.format !== "idlecast-backup" || backup.formatVersion !== 1)
+      throw new Error("Unsupported IdleCast backup format");
+    if (!Array.isArray(backup.kv) || !backup.tables || typeof backup.tables !== "object")
+      throw new Error("IdleCast backup is incomplete");
+    for (const table of backupTables)
+      if (!Array.isArray(backup.tables[table])) throw new Error("IdleCast backup is missing " + table);
+    const settingRow = backup.kv.find((row) => row?.key === "settings");
+    if (settingRow) settingsSchema.parse(JSON.parse(settingRow.value));
+    const tableColumns = Object.fromEntries(backupTables.map((table) => [
+      table,
+      (this.db.prepare("PRAGMA table_info(" + table + ")").all() as Array<{ name: string }>).map((column) => column.name),
+    ])) as Record<(typeof backupTables)[number], string[]>;
+    this.db.exec("BEGIN IMMEDIATE");
+    try {
+      this.db.exec("DELETE FROM marathon_entries; DELETE FROM marathons; DELETE FROM playback_history; DELETE FROM items;");
+      for (const table of backupTables) {
+        const columns = tableColumns[table];
+        const insert = this.db.prepare(
+          "INSERT INTO " + table + " (" + columns.join(",") + ") VALUES (" + columns.map(() => "?").join(",") + ")",
+        );
+        for (const raw of backup.tables[table]) {
+          if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Invalid " + table + " row in backup");
+          const row = raw as Record<string, unknown>;
+          insert.run(...columns.map((column) => row[column] === undefined ? null : row[column] as any));
+        }
+      }
+      const removeKey = this.db.prepare("DELETE FROM kv WHERE key=?");
+      for (const key of backupKvKeys) removeKey.run(key);
+      const put = this.db.prepare("INSERT INTO kv(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value");
+      for (const row of backup.kv) {
+        if (!row || typeof row.key !== "string" || typeof row.value !== "string" || !backupKvKeys.has(row.key)) continue;
+        JSON.parse(row.value);
+        put.run(row.key, row.value);
+      }
+      this.db.exec("COMMIT");
+    } catch (error) {
+      this.db.exec("ROLLBACK");
+      throw error;
+    }
   }
   list(offset = 0, limit = 100): StoredItem[] {
     return (

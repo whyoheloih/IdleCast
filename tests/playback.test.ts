@@ -15,6 +15,7 @@ import {
   Engine,
   countsTowardFailureHistory,
   pausesDownloadQueue,
+  recoveryCircuitKind,
 } from "../server/engine.js";
 import { runCapture, delay } from "../server/process.js";
 import {
@@ -40,6 +41,17 @@ test("systemic download outages do not poison per-video failure history", () => 
     true,
   );
   assert.equal(pausesDownloadQueue("Media file cannot be decoded"), false);
+});
+
+test("recovery circuit classification targets shared failures but not individual bad videos", () => {
+  assert.equal(recoveryCircuitKind("YouTube requires account verification"), "authentication");
+  assert.equal(recoveryCircuitKind("HTTP 429 rate limit"), "rate-limit");
+  assert.equal(recoveryCircuitKind("cache storage is unavailable"), "storage");
+  assert.equal(recoveryCircuitKind("external drive disconnected"), "local-drive");
+  assert.equal(recoveryCircuitKind("temporary network timeout"), "network");
+  assert.equal(recoveryCircuitKind("JavaScript challenge failed"), "extractor");
+  assert.equal(recoveryCircuitKind("required media executable could not start"), "runtime");
+  assert.equal(recoveryCircuitKind("this one video is corrupt"), null);
 });
 
 test("FFmpeg overlay has no background box and has outlined text with an opaque square avatar", async () => {

@@ -1,6 +1,6 @@
 {
   "name": "idlecast",
-  "version": "1.5.4",
+  "version": "1.6.0",
   "private": true,
   "type": "module",
   "engines": {
@@ -13,6 +13,9 @@
     "test": "tsx --test tests/*.test.ts",
     "check": "tsc --noEmit",
     "test:browser": "tsx tests/browser.e2e.ts",
+    "test:soak": "tsx tests/playback-soak.ts",
+    "backup": "tsx scripts/backup-restore.ts export",
+    "restore": "tsx scripts/backup-restore.ts restore",
     "build:server": "esbuild server/index.ts --bundle --platform=node --format=cjs --target=node22 --outfile=dist-server/index.cjs",
     "desktop:dev": "pnpm build && electron .",
     "desktop:dist": "pnpm build && pnpm build:server && node scripts/prepare-desktop.mjs && node scripts/build-desktop.mjs"

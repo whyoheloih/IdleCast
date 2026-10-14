@@ -8,6 +8,53 @@ export const STARTUP_DOWNLOAD_COUNT = 5;
 export const STARTUP_DOWNLOAD_MAX_SECONDS = 30 * 60;
 export const DOWNLOAD_LEAD_SECONDS = 2 * 60 * 60;
 export const VERY_LONG_VIDEO_SECONDS = 3 * 60 * 60;
+export const SERIES_BLOCK_GAP = 5;
+
+export function canStartSeriesBlock(
+  candidate: Pick<PlaylistItem, "seriesKey">,
+  activeSeriesKey: string,
+  ordinaryVideosSinceSeries: number,
+) {
+  if (!candidate.seriesKey) return true;
+  const continuingCurrentBlock =
+    candidate.seriesKey === activeSeriesKey && ordinaryVideosSinceSeries === 0;
+  return continuingCurrentBlock || ordinaryVideosSinceSeries >= SERIES_BLOCK_GAP;
+}
+
+export function seriesStateAfterActivation(
+  item: Pick<PlaylistItem, "seriesKey" | "duration">,
+  activeSeriesKey: string,
+  ordinaryVideosSinceSeries: number,
+  activeSeriesDuration: number,
+) {
+  if (item.seriesKey) {
+    const continuing =
+      item.seriesKey === activeSeriesKey && ordinaryVideosSinceSeries === 0;
+    const duration = Math.max(0, item.duration ?? 0);
+    return {
+      activeSeriesKey: item.seriesKey,
+      ordinaryVideosSinceSeries: 0,
+      activeSeriesDuration: continuing
+        ? activeSeriesDuration + duration
+        : duration,
+    };
+  }
+  if (!activeSeriesKey)
+    return {
+      activeSeriesKey: "",
+      ordinaryVideosSinceSeries: SERIES_BLOCK_GAP,
+      activeSeriesDuration: 0,
+    };
+  const ordinary = Math.min(
+    SERIES_BLOCK_GAP,
+    ordinaryVideosSinceSeries + 1,
+  );
+  return {
+    activeSeriesKey: ordinary >= SERIES_BLOCK_GAP ? "" : activeSeriesKey,
+    ordinaryVideosSinceSeries: ordinary,
+    activeSeriesDuration: ordinary >= SERIES_BLOCK_GAP ? 0 : activeSeriesDuration,
+  };
+}
 
 export function sameSeries(a: PlaylistItem | undefined, b: PlaylistItem) {
   return !!a?.seriesKey && a.seriesKey === b.seriesKey;
@@ -358,8 +405,20 @@ export function prepareQueue(
   let blocks = seriesBlocks(result, settings.filters.seriesLimit);
   if (settings.shuffle) {
     const ordered: PlaylistItem[][] = [];
+    let seriesBlockQueued = false;
+    let ordinaryBlocksSinceSeries = SERIES_BLOCK_GAP;
     while (blocks.length) {
-      const previous = ordered.at(-1)?.at(-1);
+      const previousBlock = ordered.at(-1);
+      const previousItem = previousBlock?.at(-1);
+      const previous = previousItem && previousBlock?.[0].seriesKey
+        ? {
+            ...previousItem,
+            duration: previousBlock.reduce(
+              (total, entry) => total + Math.max(0, entry.duration ?? 0),
+              0,
+            ),
+          }
+        : previousItem;
       let candidates = blocks.map((_, index) => index);
       const queuedCount = ordered.reduce((count, block) => count + block.length, 0);
       if (queuedCount < STARTUP_DOWNLOAD_COUNT) {
@@ -375,7 +434,14 @@ export function prepareQueue(
           blocks[index].slice(0, remaining).every(canStartShuffledQueue),
         );
         if (opening.length) candidates = opening;
-      } else if (previous) {
+      }
+      if (seriesBlockQueued && ordinaryBlocksSinceSeries < SERIES_BLOCK_GAP) {
+        const ordinary = candidates.filter(
+          (index) => !blocks[index][0].seriesKey,
+        );
+        if (ordinary.length) candidates = ordinary;
+      }
+      if (queuedCount >= 2 && previous) {
         if (previous.seriesKey) {
           const afterSeries = candidates.filter(
             (index) => blocks[index][0].seriesKey !== previous.seriesKey,
@@ -415,7 +481,17 @@ export function prepareQueue(
         );
       if ((selected.playCount ?? 0) > minimum)
         selected.selectionPenalty = (selected.selectionPenalty ?? 0) + 1;
-      ordered.push(blocks.splice(next, 1)[0]);
+      const selectedBlock = blocks.splice(next, 1)[0];
+      ordered.push(selectedBlock);
+      if (selectedBlock[0].seriesKey) {
+        seriesBlockQueued = true;
+        ordinaryBlocksSinceSeries = 0;
+      } else if (seriesBlockQueued) {
+        ordinaryBlocksSinceSeries = Math.min(
+          SERIES_BLOCK_GAP,
+          ordinaryBlocksSinceSeries + 1,
+        );
+      }
     }
     blocks = ordered;
   }

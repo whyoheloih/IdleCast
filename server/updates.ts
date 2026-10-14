@@ -3,6 +3,19 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.6.0",
+    date: "Oct 14, 2026",
+    title: "Unattended reliability toolkit",
+    items: [
+      "Overview queue readiness distinguishes validated playback-buffer entries from files that are merely downloaded or still preparing",
+      "Repeated authentication, rate-limit, storage, drive, network, extractor, or runtime failures open a durable bounded recovery circuit instead of creating retry storms",
+      "Recent recovery summaries record the intended video, observed problem, fallback coverage, attempt count, duration, and final outcome",
+      "Credential-free backup and explicitly confirmed restore commands preserve settings, queues, playback history, Marathon state, play counts, diagnostics, and recovery history",
+      "A configurable twelve-hour playback soak exercises real FFmpeg transitions, a forced output failure, and a recoverable source timeout in an isolated workspace",
+      "Series Continuing treats each episode run as one long programming block and requires five ordinary videos before another series block",
+    ],
+  },
+  {
     version: "1.5.4",
     date: "Oct 13, 2026",
     title: "Playback recovery and full verification",

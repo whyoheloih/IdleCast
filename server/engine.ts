@@ -24,6 +24,9 @@ import {
 } from "./process.js";
 import {
   prepareQueue,
+  canStartSeriesBlock,
+  seriesStateAfterActivation,
+  SERIES_BLOCK_GAP,
   isLongVideo,
   canStartShuffledQueue,
   needsLongDownloadLead,
@@ -52,6 +55,27 @@ export function pausesDownloadQueue(message: string) {
   return /account verification|rate limit|media disk is full|required media executable|executable path|cache storage is unavailable|local media folder unavailable|external drive disconnected/i.test(
     message,
   );
+}
+
+export type RecoveryCircuitKind = "authentication" | "rate-limit" | "storage" | "local-drive" | "network" | "extractor" | "runtime";
+export type RecoveryCircuit = {
+  kind: RecoveryCircuitKind;
+  failures: number;
+  activations: number;
+  lastFailureAt: number;
+  openUntil: number;
+  lastError: string;
+};
+
+export function recoveryCircuitKind(message: string): RecoveryCircuitKind | null {
+  if (/account verification|cookies rejected|sign in|login required/i.test(message)) return "authentication";
+  if (/rate limit|http 429|too many requests/i.test(message)) return "rate-limit";
+  if (/disk is full|no space left|cache storage is unavailable|insufficient.*space/i.test(message)) return "storage";
+  if (/local media folder unavailable|external drive disconnected/i.test(message)) return "local-drive";
+  if (/network|timed out|timeout|connection (?:reset|refused)|socket hang up|temporary failure/i.test(message)) return "network";
+  if (/javascript challenge|signature extraction|nsig|requested format.*not available/i.test(message)) return "extractor";
+  if (/required media executable|executable could not start|executable path/i.test(message)) return "runtime";
+  return null;
 }
 
 export type OutputState = {
@@ -123,6 +147,7 @@ export class Engine extends EventEmitter {
   readonly emergencyFallback: EmergencyFallbackCatalog;
   private recoveryTask: Promise<void> | null = null;
   private lastFallbackEmptyLog = 0;
+  private lastCircuitNotice = 0;
   previewSource() {
     if (this.state !== "playing" || !this.currentMedia || !this.clip)
       return null;
@@ -174,6 +199,87 @@ export class Engine extends EventEmitter {
       )
         void this.sync().catch(() => {});
     }, 60000);
+  }
+  private recoveryCircuits() {
+    return this.store.get<Record<string, RecoveryCircuit>>("recoveryCircuitBreakers", {});
+  }
+  private activeRecoveryCircuit() {
+    const now = Date.now();
+    return Object.values(this.recoveryCircuits())
+      .filter((circuit) => circuit.openUntil > now)
+      .sort((left, right) => right.openUntil - left.openUntil)[0] ?? null;
+  }
+  private recordRecoveryCircuitFailure(message: string) {
+    const kind = recoveryCircuitKind(message);
+    if (!kind) return null;
+    const now = Date.now();
+    const circuits = this.recoveryCircuits();
+    const prior = circuits[kind];
+    const failures = prior && now - prior.lastFailureAt <= 10 * 60_000 ? prior.failures + 1 : 1;
+    const activations = prior?.activations ?? 0;
+    const opens = failures >= 3;
+    const next: RecoveryCircuit = {
+      kind,
+      failures,
+      activations: opens ? activations + 1 : activations,
+      lastFailureAt: now,
+      openUntil: opens ? now + Math.min(30 * 60_000, 5 * 60_000 * Math.pow(2, Math.min(3, activations))) : 0,
+      lastError: message.slice(0, 1000),
+    };
+    circuits[kind] = next;
+    this.store.set("recoveryCircuitBreakers", circuits);
+    if (opens && (!prior || prior.openUntil <= now)) {
+      this.event("Recovery circuit opened for " + kind + " failures; repeated operations will pause until " + new Date(next.openUntil).toISOString(), "warn", {
+        circuit: kind, failures, openUntil: next.openUntil,
+      });
+    }
+    return next;
+  }
+  private clearRecoveryCircuits() {
+    const circuits = this.recoveryCircuits();
+    if (!Object.keys(circuits).length) return;
+    this.store.set("recoveryCircuitBreakers", {});
+    this.event("Recovery circuit reset after a successful media preparation", "info");
+  }
+  private queueReadiness() {
+    const queue = this.downloadQueue();
+    const upcoming = queue.entries
+      .filter((entry) => !(entry.current && this.state === "playing"))
+      .slice(0, this.bufferTarget);
+    const target = upcoming.length
+      ? Math.min(this.bufferTarget, upcoming.length)
+      : this.bufferTarget;
+    const ready = upcoming.filter((entry) => entry.status === "downloaded").length;
+    const blocked = upcoming.filter((entry) => !!entry.error).length;
+    return {
+      status: blocked ? "blocked" : ready >= target ? "ready" : upcoming.length ? "preparing" : "empty",
+      ready,
+      target,
+      blocked,
+      entries: upcoming.map((entry) => ({
+        id: entry.id,
+        title: entry.title,
+        status: entry.status,
+        percent: entry.percent,
+        diagnosticCode: entry.diagnosticCode ?? null,
+        error: entry.error ?? null,
+      })),
+    };
+  }
+  private recoverySummaries() {
+    return this.store.get<RecoveryIncident[]>("recoveryIncidentHistory", []).slice(0, 10).map((incident) => ({
+      id: incident.id,
+      intendedTitle: incident.intendedTitle,
+      sourceType: incident.sourceType,
+      outcome: incident.status,
+      attempts: incident.attempts,
+      originalFailure: incident.originalFailure,
+      lastError: incident.lastError,
+      fallbackCount: incident.consecutiveFallbackCount,
+      startedAt: incident.startedAt,
+      completedAt: incident.completedAt,
+      durationMs: incident.completedAt ? Math.max(0, incident.completedAt - incident.startedAt) : null,
+    }));
   }
   private persistDownloadJob(activity: DownloadActivity) {
     const now = Date.now();
@@ -417,12 +523,19 @@ export class Engine extends EventEmitter {
         return;
       }
       try {
+        const circuit = this.activeRecoveryCircuit();
+        if (circuit) {
+          incident.lastError = "Recovery paused by " + circuit.kind + " circuit until " + new Date(circuit.openUntil).toISOString();
+          this.saveRecoveryIncident(incident);
+          return;
+        }
         if (incident.lastAttemptAt) {
           const wait = incident.sourceType === "local" ? 30000 : Math.min(120000, backoff(Math.max(0, incident.attempts - 1)));
           const remaining = incident.lastAttemptAt + wait - Date.now();
           if (remaining > 0) await delay(remaining, signal);
         }
         const file = await source.resolve(incident.intendedItem, signal);
+        this.clearRecoveryCircuits();
         const info = await this.probeMedia(file, signal);
         const size = (await stat(file)).size;
         const latest = this.recoveryIncident();
@@ -449,6 +562,7 @@ export class Engine extends EventEmitter {
         const message = error instanceof Error ? error.message : "Recovery attempt failed";
         latest.lastError = message.slice(0, 1000);
         latest.lastAttemptAt = Date.now();
+        this.recordRecoveryCircuitFailure(message);
         const unavailable = /private video|video unavailable|deleted video|copyright|not available in your country/i.test(message);
         const userAction = /account verification|sign in|cookies|login required|rate limit/i.test(message);
         const limit = /recovery attempt limit exhausted/i.test(message) || latest.attempts >= 20;
@@ -572,6 +686,9 @@ export class Engine extends EventEmitter {
       recovery: this.recoverySnapshot(),
       emergencyFallback: this.emergencyFallback.snapshot(),
       fallbackWarning: this.fallbackWarningSnapshot(),
+      queueReadiness: this.queueReadiness(),
+      recoveryCircuit: this.activeRecoveryCircuit(),
+      recoverySummaries: this.recoverySummaries(),
     };
   }
   marathonHandoffConstraints() {
@@ -653,7 +770,12 @@ export class Engine extends EventEmitter {
           this.store.set("cursor", null);
           this.store.set("shuffleNeedsShortStart", true);
           this.store.set("shuffleShortStartsRemaining", 2);
-          this.store.set("lastVideoDuration", null);
+          this.store.set(
+            "lastVideoDuration",
+            this.store.get("activeSeriesBlockKey", "")
+              ? this.store.get("activeSeriesBlockDuration", null)
+              : null,
+          );
         }
         this.store.set("uploadDates", Object.fromEntries(fetched.map((item) => [item.videoId, item.publishedAt ?? ""])));
         this.store.set("excludedCount", queue.excluded);
@@ -1101,6 +1223,16 @@ export class Engine extends EventEmitter {
     target = this.bufferLimit,
     startIndex?: number,
   ) {
+    const circuit = this.activeRecoveryCircuit();
+    if (circuit) {
+      if (Date.now() - this.lastCircuitNotice > 60000) {
+        this.lastCircuitNotice = Date.now();
+        this.event("Buffer refill is paused by the " + circuit.kind + " recovery circuit until " + new Date(circuit.openUntil).toISOString(), "warn", {
+          circuit: circuit.kind, openUntil: circuit.openUntil,
+        });
+      }
+      return;
+    }
     const candidates = this.bufferCandidates(items, startIndex);
     const wanted = Math.min(target, candidates.length);
     for (const item of candidates.slice(0, wanted))
@@ -1129,6 +1261,7 @@ export class Engine extends EventEmitter {
       );
       try {
         const file = await source.resolve(item, signal);
+        this.clearRecoveryCircuits();
         let info;
         try {
           info = await this.probeMedia(file, signal);
@@ -1169,6 +1302,7 @@ export class Engine extends EventEmitter {
             message,
           "warn",
         );
+        this.recordRecoveryCircuitFailure(message);
         if (pausesDownloadQueue(message)) {
           this.event(
             "Buffer refill paused because the downloader needs attention; IdleCast will retry without cycling through every video",
@@ -1548,12 +1682,26 @@ export class Engine extends EventEmitter {
         "lastVideoDuration",
         null,
       );
+      const activeSeriesKey = this.store.get("activeSeriesBlockKey", "");
+      const ordinaryVideosSinceSeries = this.store.get<number>(
+        "ordinaryVideosSinceSeries",
+        SERIES_BLOCK_GAP,
+      );
       const followsShuffleRules = (candidate: StoredItem, resuming = false) => {
-        if (!s.shuffle || resuming) return true;
+        if (resuming) return true;
+        if (
+          !canStartSeriesBlock(
+            candidate,
+            activeSeriesKey,
+            ordinaryVideosSinceSeries,
+          )
+        )
+          return false;
+        if (!s.shuffle) return true;
         if (
           candidate.seriesKey &&
-          candidate.seriesKey ===
-            this.store.get("lastVideoSeries", "")
+          candidate.seriesKey === activeSeriesKey &&
+          ordinaryVideosSinceSeries === 0
         )
           return true;
         if (needsLongDownloadLead(candidate))
@@ -1801,8 +1949,26 @@ export class Engine extends EventEmitter {
           this.store.set("shuffleNeedsShortStart", remaining > 0);
         }
         if (!marathon && !isFallback) {
+          const seriesState = seriesStateAfterActivation(
+            item,
+            this.store.get("activeSeriesBlockKey", ""),
+            this.store.get<number>("ordinaryVideosSinceSeries", SERIES_BLOCK_GAP),
+            this.store.get<number>("activeSeriesBlockDuration", 0),
+          );
+          this.store.set("activeSeriesBlockKey", seriesState.activeSeriesKey);
+          this.store.set(
+            "ordinaryVideosSinceSeries",
+            seriesState.ordinaryVideosSinceSeries,
+          );
+          this.store.set(
+            "activeSeriesBlockDuration",
+            seriesState.activeSeriesDuration,
+          );
           this.store.set("lastVideoLong", isLongVideo(item));
-          this.store.set("lastVideoDuration", item.duration);
+          this.store.set(
+            "lastVideoDuration",
+            item.seriesKey ? seriesState.activeSeriesDuration : item.duration,
+          );
           this.store.set("lastVideoSeries", item.seriesKey ?? "");
           this.store.set("cursor", { id: item.id, offset });
           if (handoff) this.scheduleOwnedRefill(source, signal);

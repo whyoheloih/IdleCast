@@ -273,3 +273,31 @@ test("media child cancellation and capped reconnect backoff", async () => {
   );
   assert.equal(largeOutput.length, 1048576);
 });
+
+test("credential-free backup restores station state transactionally", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "idlecast-backup-"));
+  const database = new Store(path.join(root, "db.sqlite"));
+  try {
+    const savedSettings = { ...defaults, overlay: { ...defaults.overlay, title: "Backed up station" } };
+    database.set("settings", savedSettings);
+    database.set("credentialsEncrypted", "must-not-leave-the-store");
+    database.set("playCounts", { abcdefghijk: 7 });
+    database.replace([item("backup-entry", 0)]);
+    const historyId = database.startPlayback(item("backup-entry", 0));
+    database.finishPlayback(historyId, "played", 4);
+    const backup = database.exportBackup("test");
+    assert.equal(backup.kv.some((row) => row.key === "credentialsEncrypted"), false);
+    database.set("settings", defaults);
+    database.replace([]);
+    database.set("playCounts", {});
+    database.restoreBackup(backup);
+    assert.equal(database.settings().overlay.title, "Backed up station");
+    assert.equal(database.all()[0]?.id, "backup-entry");
+    assert.equal(database.playbackHistory()[0]?.status, "played");
+    assert.deepEqual(database.get("playCounts", {}), { abcdefghijk: 7 });
+    assert.equal(database.get("credentialsEncrypted", ""), "must-not-leave-the-store");
+  } finally {
+    database.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
