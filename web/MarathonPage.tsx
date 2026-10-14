@@ -183,6 +183,13 @@ export function MarathonPage({
   const [youtubeSourceDirty, setYoutubeSourceDirty] = useState(false);
   const [youtubeSourceConflict, setYoutubeSourceConflict] = useState(false);
   const sourceEditGeneration = useRef(0);
+  const syncedRuntime = useMemo(() => ({
+    seconds: items.reduce(
+      (total, item) => total + (Number.isFinite(item.duration) ? Math.max(0, item.duration ?? 0) : 0),
+      0,
+    ),
+    unknown: items.filter((item) => !Number.isFinite(item.duration)).length,
+  }), [items]);
 
   const selectedLocalTime = combineLocal(selectedDate, hour, minute, period);
   const activeRecord = record && (!current || record.marathon.id === current.marathon.id) ? record : current ?? record;
@@ -400,6 +407,18 @@ export function MarathonPage({
             <h2>Filters</h2>
             <p>These are the same filters used from Playlist and Settings.</p>
           </div>
+        </div>
+        <div className="synced-runtime-card">
+          <div>
+            <span className="eyebrow">CURRENT SYNCED PLAYLIST</span>
+            <b>{duration(syncedRuntime.seconds)}</b>
+          </div>
+          <p>
+            Estimated playlist length from {items.length} currently eligible video{items.length === 1 ? "" : "s"}.
+            {syncedRuntime.unknown
+              ? " " + syncedRuntime.unknown + " video duration" + (syncedRuntime.unknown === 1 ? " is" : "s are") + " unknown and not included."
+              : " All synced durations are included."}
+          </p>
         </div>
         {filterPanel}
       </section>

@@ -187,6 +187,17 @@ async function api(url: string, method = "GET", body?: unknown) {
 }
 const time = (n: number) =>
   new Date(Math.max(0, n) * 1000).toISOString().slice(11, 19);
+const playlistLength = (seconds: number) => {
+  const value = Math.max(0, Math.floor(seconds));
+  const days = Math.floor(value / 86400);
+  const hours = Math.floor((value % 86400) / 3600);
+  const minutes = Math.floor((value % 3600) / 60);
+  return [
+    days ? days + "d" : "",
+    hours ? hours + "h" : "",
+    minutes + "m",
+  ].filter(Boolean).join(" ");
+};
 const hasQueueSource = (settings: Settings | null) =>
   !!settings && (settings.mediaSource === "local"
     ? !!settings.localDirectory.trim()
@@ -423,6 +434,13 @@ function App() {
     });
   }
   const draggedTitle = items.find((item) => item.id === draggedId)?.title;
+  const syncedPlaylistSeconds = items.reduce(
+    (total, item) => total + (Number.isFinite(item.duration) ? Math.max(0, item.duration ?? 0) : 0),
+    0,
+  );
+  const unknownPlaylistDurations = items.filter(
+    (item) => !Number.isFinite(item.duration),
+  ).length;
   if (auth === null)
     return (
       <div className="login">
@@ -1016,6 +1034,11 @@ function App() {
                 <p>Drag a video to the highlighted drop marker · the queue loops continuously</p>
               </div>
               <div className="heading-actions">
+                <div className="playlist-runtime-summary" title="Sum of durations in the currently synchronized, filtered queue">
+                  <small>ESTIMATED PLAYLIST LENGTH</small>
+                  <b>{playlistLength(syncedPlaylistSeconds)}</b>
+                  <span>{items.length} videos{unknownPlaylistDurations ? " · " + unknownPlaylistDurations + " unknown" : ""}</span>
+                </div>
                 <button type="button" onClick={() => setFilterOpen((open) => !open)}>
                   <SlidersHorizontal size={16} />
                   Filters

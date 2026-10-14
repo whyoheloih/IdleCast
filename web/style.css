@@ -2026,3 +2026,22 @@ html[data-theme="light"] .recovery-summary-list details > div { background:#eef5
   .readiness-row { grid-template-columns:22px minmax(0,1fr); }
   .readiness-state { grid-column:2; justify-self:start; }
 }
+
+/* Synchronized playlist runtime */
+.playlist-runtime-summary { display:grid; gap:2px; min-width:150px; padding:7px 10px; border:1px solid #33475b; border-radius:7px; background:#17212c; text-align:right; }
+.playlist-runtime-summary small { color:#75889a; font-size:7px; letter-spacing:.08em; }
+.playlist-runtime-summary b { color:#a9d7ff; font-size:13px; font-variant-numeric:tabular-nums; }
+.playlist-runtime-summary span { color:#7f8b97; font-size:8px; }
+.synced-runtime-card { display:flex; align-items:center; justify-content:space-between; gap:24px; margin:0 18px 18px; padding:15px 17px; border:1px solid #3a3352; border-radius:9px; background:linear-gradient(100deg,rgba(85,61,135,.2),rgba(25,29,36,.7)); }
+.synced-runtime-card > div { display:grid; gap:6px; }
+.synced-runtime-card b { color:#c4b4ee; font-size:22px; font-variant-numeric:tabular-nums; }
+.synced-runtime-card p { max-width:560px; margin:0; color:#8e98a5; font-size:9px; line-height:1.6; text-align:right; }
+html[data-theme="light"] .playlist-runtime-summary { background:#e7f2fa; border-color:#aac6da; }
+html[data-theme="light"] .playlist-runtime-summary b { color:#245f8c; }
+html[data-theme="light"] .synced-runtime-card { background:#eee9f8; border-color:#c5b7df; }
+html[data-theme="light"] .synced-runtime-card b { color:#594083; }
+@media (max-width:720px) {
+  .playlist-runtime-summary { width:100%; text-align:left; }
+  .synced-runtime-card { align-items:flex-start; flex-direction:column; gap:8px; }
+  .synced-runtime-card p { text-align:left; }
+}

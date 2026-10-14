@@ -3,6 +3,16 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.6.3",
+    date: "Oct 14, 2026",
+    title: "Synced playlist length",
+    items: [
+      "Playlist and Filters show the estimated total runtime of the current synchronized, filtered queue",
+      "The estimate refreshes after Sync, Reshuffle, local rescans, and saved filter changes",
+      "Videos with unknown durations are counted separately instead of silently inflating the estimate",
+    ],
+  },
+  {
     version: "1.6.1",
     date: "Oct 14, 2026",
     title: "Ascending Series Continuing order",
