@@ -61,7 +61,7 @@ export type MediaSourceHooks = {
   onResolved?: (item: PlaylistItem) => void;
 };
 export function isRetryableDownloadFailure(message: string) {
-  return !/account verification|rate limit|media disk is full|required media executable|executable path|cache limit exceeded|exceeds the configured per-video cache limit|cache storage is unavailable|recovery attempt limit exhausted/i.test(
+  return !/account verification|rate limit|media disk is full|required media executable|packaged ffmpeg runtime is missing|executable path|cache limit exceeded|exceeds the configured per-video cache limit|cache storage is unavailable|recovery attempt limit exhausted/i.test(
     message,
   );
 }
@@ -603,7 +603,15 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
       })(),
     );
     const file = await this.cachedFile(root, item.videoId);
-    if (!file) throw new Error("Download produced no merged media; check FFmpeg location and cache limit");
+    if (!file) {
+      const base = this.cacheName(item.videoId) + ".";
+      const separateStreams = (await readdir(root)).some((name) =>
+        name.startsWith(base) && /\.f\d+\./i.test(name),
+      );
+      if (separateStreams)
+        throw new Error("FFmpeg location is invalid; downloaded audio/video streams were not merged");
+      throw new Error("Download produced no merged media; check FFmpeg location and cache limit");
+    }
     if ((await stat(file)).size > perVideoLimit) {
       await this.removeCached(root, path.basename(file));
       throw new Error("Video exceeds the configured per-video cache limit");

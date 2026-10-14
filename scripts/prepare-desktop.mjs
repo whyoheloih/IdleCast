@@ -50,11 +50,15 @@ async function locate(name, candidates, probeArgs) {
 const tools = {
   "ffmpeg.exe": await locate("ffmpeg.exe", [
     process.env.FFMPEG_PATH,
+    process.env.ChocolateyInstall && path.join(process.env.ChocolateyInstall, "lib", "ffmpeg", "tools", "ffmpeg", "bin", "ffmpeg.exe"),
+    "C:/ProgramData/chocolatey/lib/ffmpeg/tools/ffmpeg/bin/ffmpeg.exe",
     "C:/Program Files/ffmpeg/ffmpeg.exe",
     "C:/Program Files/ffmpeg/bin/ffmpeg.exe",
   ], ["-version"]),
   "ffprobe.exe": await locate("ffprobe.exe", [
     process.env.FFPROBE_PATH,
+    process.env.ChocolateyInstall && path.join(process.env.ChocolateyInstall, "lib", "ffmpeg", "tools", "ffmpeg", "bin", "ffprobe.exe"),
+    "C:/ProgramData/chocolatey/lib/ffmpeg/tools/ffmpeg/bin/ffprobe.exe",
     "C:/Program Files/ffmpeg/ffprobe.exe",
     "C:/Program Files/ffmpeg/bin/ffprobe.exe",
   ], ["-version"]),

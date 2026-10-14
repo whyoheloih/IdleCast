@@ -3,6 +3,16 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.6.5",
+    date: "Oct 14, 2026",
+    title: "Packaged FFmpeg merge repair",
+    items: [
+      "Windows releases now bundle the real FFmpeg and FFprobe executables instead of Chocolatey launcher shims",
+      "Release publication validates yt-dlp, FFmpeg, and FFprobe from inside the completed desktop application",
+      "Unmerged separate streams now identify the invalid FFmpeg location, and recovery attempts display against the 20-attempt incident limit",
+    ],
+  },
+  {
     version: "1.6.4",
     date: "Oct 14, 2026",
     title: "Packaged downloader repair",

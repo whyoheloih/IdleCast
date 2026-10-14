@@ -1145,7 +1145,7 @@ export class Engine extends EventEmitter {
               ).catch(() => {});
               if (download?.status === "retrying")
                 this.event(
-                  "Retrying download (attempt " + download.attempt + "/3): " + download.title +
+                  "Retrying download (attempt " + download.attempt + "/" + (download.attempt > 3 ? 20 : 3) + "): " + download.title +
                     (download.error ? " — previous failure: " + download.error : ""),
                   "warn",
                 );
