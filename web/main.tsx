@@ -2162,6 +2162,7 @@ function Status({ ok, label }: { ok: boolean; label: string }) {
       className={
         "playlist-row " +
         (active ? "playing-row " : "") +
+        (item.seriesKey ? "series-row " : "") +
         (marathon ? "marathon-row " : "") +
         (dragging ? "dragging-row " : "") +
         (dropEdge ? "drop-target" : "")
@@ -2214,6 +2215,12 @@ function Status({ ok, label }: { ok: boolean; label: string }) {
           {item.seriesKey && " · Series " + (item.seriesIndex ?? "")}
         </small>
       </div>
+      {!marathon && <span className="normal-queue-badge">NORMAL QUEUE</span>}
+      {item.seriesKey && (
+        <span className="series-row-badge">
+          SERIES · EPISODE {item.seriesIndex ?? "?"}
+        </span>
+      )}
       {marathon && <span className="marathon-row-badge">MARATHON PLAY</span>}
       <span
         className={!item.available || item.error ? "tag amber" : "row-duration"}

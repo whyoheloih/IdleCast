@@ -269,12 +269,12 @@ test("series blocks override long adjacency and require five ordinary videos bet
     },
   });
   const queue = prepareQueue([
-    make("a1", "First | Alpha Series [1]", 1_500),
-    make("a2", "Second | Alpha Series [2]", 1_500),
     make("a3", "Third | Alpha Series [3]", 1_500),
-    make("b1", "First | Beta Series [1]", 1_500),
-    make("b2", "Second | Beta Series [2]", 1_500),
+    make("a2", "Second | Alpha Series [2]", 1_500),
+    make("a1", "First | Alpha Series [1]", 1_500),
     make("b3", "Third | Beta Series [3]", 1_500),
+    make("b2", "Second | Beta Series [2]", 1_500),
+    make("b1", "First | Beta Series [1]", 1_500),
     ...Array.from({ length: 7 }, (_, index) =>
       make(`o${index + 1}`, `Ordinary ${index + 1}`),
     ),

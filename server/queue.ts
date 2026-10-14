@@ -300,10 +300,14 @@ function seriesBlocks(items: PlaylistItem[], limit: number) {
       blocks.push([trigger]);
       continue;
     }
-    const triggerIndex = trigger.seriesIndex ?? 0;
     const continuation = (bySeries.get(trigger.seriesKey) ?? [trigger])
-      .filter((item) => !emitted.has(item.id) && (item.seriesIndex ?? 0) >= triggerIndex)
-      .sort((a, b) => (a.seriesIndex ?? 0) - (b.seriesIndex ?? 0))
+      .filter((item) => !emitted.has(item.id))
+      .sort(
+        (a, b) =>
+          (a.seriesIndex ?? Number.MAX_SAFE_INTEGER) -
+            (b.seriesIndex ?? Number.MAX_SAFE_INTEGER) ||
+          a.position - b.position,
+      )
       .slice(0, limit);
     const block = continuation.length ? continuation : [trigger];
     for (const item of block) emitted.add(item.id);

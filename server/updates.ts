@@ -3,6 +3,17 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.6.1",
+    date: "Oct 14, 2026",
+    title: "Ascending Series Continuing order",
+    items: [
+      "Series Continuing now sorts the complete available series numerically before applying its configured episode limit",
+      "Newest-first YouTube playlist results no longer make a higher episode number start ahead of lower-numbered episodes",
+      "Playlist rows show Normal Queue or Marathon Play ownership, plus a purple episode badge for detected series entries",
+      "Five ordinary videos still separate distinct series blocks, and episodes inside the active block still override long-video adjacency limits",
+    ],
+  },
+  {
     version: "1.6.0",
     date: "Oct 14, 2026",
     title: "Unattended reliability toolkit",

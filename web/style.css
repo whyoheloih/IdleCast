@@ -1649,6 +1649,9 @@ html[data-theme="light"] .history-row,
 html[data-theme="light"] .playlist-row,
 html[data-theme="light"] .log-row,
 html[data-theme="light"] footer { border-color: #c3d3df; }
+html[data-theme="light"] .normal-queue-badge { background:#e1f1ff; border-color:#91bddd; color:#245f8c; }
+html[data-theme="light"] .series-row { background: linear-gradient(90deg, rgba(124,91,190,.14), transparent 62%); box-shadow: inset 3px 0 #7653ba; }
+html[data-theme="light"] .series-row-badge { background:#eee7fb; border-color:#ad95da; color:#604092; }
 html[data-theme="light"] nav button.active,
 html[data-theme="light"] .playing-row { background: #cfe5f7; color: #163d62; }
 html[data-theme="light"] .theme-toggle { background: #c5def1; border-color: #8fb7d7; color: #194e79; }
@@ -1798,7 +1801,11 @@ html[data-theme="light"] .health-code { background: #fff5eb; border-color: #d7b3
 .marathon-entry b { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 11px; }
 .marathon-entry small { display: block; margin-top: 5px; color: #8f8798; font-size: 9px; }
 .snapshot-builder > label { max-width: 520px; }
+.normal-queue-badge { flex-shrink:0; padding:5px 8px; border:1px solid rgba(90,169,255,.38); border-radius:5px; background:rgba(45,112,171,.12); color:#83bff2; font-size:8px; font-weight:850; letter-spacing:.07em; white-space:nowrap; }
+.series-row { background: linear-gradient(90deg, rgba(115,90,190,.14), transparent 62%); box-shadow: inset 3px 0 #8c70d8; }
+.series-row-badge { flex-shrink: 0; padding: 5px 8px; border: 1px solid rgba(160,132,231,.48); border-radius: 5px; background: rgba(106,78,176,.14); color: #bea9f5; font-size: 8px; font-weight: 850; letter-spacing: .07em; white-space: nowrap; }
 .marathon-row { background: linear-gradient(90deg, rgba(214,164,54,.13), transparent 58%); box-shadow: inset 3px 0 #d6a436; }
+.marathon-row .series-row-badge { border-color: rgba(214,164,54,.38); color: #d7c494; }
 .marathon-row-badge { flex-shrink: 0; color: #ffd66b; font-size: 9px; font-weight: 900; letter-spacing: .08em; }
 .marathon-row .drag-handle { opacity: .25; cursor: not-allowed; }
 html[data-theme="light"] .marathon-shell { background: #ede7f5; border-color: #bcaad4; }
@@ -1816,7 +1823,7 @@ html[data-theme="light"] .source-mode-grid button, html[data-theme="light"] .sch
   .schedule-result i { display: none; }
   .marathon-entry { grid-template-columns: 24px 58px minmax(0,1fr); }
   .entry-thumb { width: 58px; height: 36px; }
-  .entry-state, .marathon-row-badge { display: none; }
+  .entry-state, .normal-queue-badge, .marathon-row-badge, .series-row-badge { display: none; }
 }
 
 .status-ending { color: #ffd772; border-color: #c69238; background: #5b42183d; }
