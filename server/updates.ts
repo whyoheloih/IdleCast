@@ -3,6 +3,16 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.5.2",
+    date: "Oct 13, 2026",
+    title: "Reliable series continuation detection",
+    items: [
+      "Series titles using VIDEO TITLE | SERIES NAME [EPISODE NUMBER] are recognized as the authoritative format",
+      "Detected exact-format episodes keep their series identity even when only one episode is currently available",
+      "Series continuation still plays available episodes in ascending numerical order and counts the triggering video toward the configured limit",
+    ],
+  },
+  {
     version: "1.5.1",
     date: "Oct 13, 2026",
     title: "Marathon source editor repair",

@@ -1,18 +1,18 @@
-name: Build and publish IdleCast 1.5.1
+name: Build and publish IdleCast 1.5.2
 
 on:
   push:
     branches:
       - main
     paths:
-      - .github/workflows/release-1.5.1.yml
+      - .github/workflows/release-1.5.2.yml
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: idlecast-release-1.5.1
+  group: idlecast-release-1.5.2
   cancel-in-progress: false
 
 jobs:
@@ -56,9 +56,9 @@ jobs:
         shell: pwsh
         run: |
           $files = @(
-            "release/IdleCast-Setup-1.5.1-x64.exe",
-            "release/IdleCast-Setup-1.5.1-x64.exe.blockmap",
-            "release/IdleCast-Portable-1.5.1-x64.exe",
+            "release/IdleCast-Setup-1.5.2-x64.exe",
+            "release/IdleCast-Setup-1.5.2-x64.exe.blockmap",
+            "release/IdleCast-Portable-1.5.2-x64.exe",
             "release/latest.yml"
           )
           foreach ($file in $files) {
@@ -73,19 +73,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $files = @(
-            "release/IdleCast-Setup-1.5.1-x64.exe",
-            "release/IdleCast-Setup-1.5.1-x64.exe.blockmap",
-            "release/IdleCast-Portable-1.5.1-x64.exe",
+            "release/IdleCast-Setup-1.5.2-x64.exe",
+            "release/IdleCast-Setup-1.5.2-x64.exe.blockmap",
+            "release/IdleCast-Portable-1.5.2-x64.exe",
             "release/latest.yml"
           )
           $notes = @"
-          IdleCast 1.5.1 fixes the Marathon Play YouTube source editor.
+          IdleCast 1.5.2 improves Series Continuing detection and ordering.
 
-          Empty and partial URLs remain editable, backend refreshes preserve unsaved drafts, and source changes apply only after Save & sync succeeds.
+          Titles using VIDEO TITLE | SERIES NAME [EPISODE NUMBER] are recognized reliably, exact-format singleton episodes retain their series metadata, and available episodes continue in ascending numerical order.
           "@
-          if (gh release view v1.5.1 --repo ${{ github.repository }} 2>$null) {
-            gh release upload v1.5.1 @files --clobber --repo ${{ github.repository }}
-            gh release edit v1.5.1 --title "IdleCast 1.5.1" --notes "$notes" --latest --repo ${{ github.repository }}
+          if (gh release view v1.5.2 --repo ${{ github.repository }} 2>$null) {
+            gh release upload v1.5.2 @files --clobber --repo ${{ github.repository }}
+            gh release edit v1.5.2 --title "IdleCast 1.5.2" --notes "$notes" --latest --repo ${{ github.repository }}
           } else {
-            gh release create v1.5.1 @files --target ${{ github.sha }} --title "IdleCast 1.5.1" --notes "$notes" --latest --repo ${{ github.repository }}
+            gh release create v1.5.2 @files --target ${{ github.sha }} --title "IdleCast 1.5.2" --notes "$notes" --latest --repo ${{ github.repository }}
           }
