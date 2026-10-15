@@ -1,5 +1,5 @@
 import { existsSync } from "node:fs";
-import { mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Config, Settings } from "./config.js";
 import type { PlaylistItem } from "./providers.js";
@@ -50,11 +50,22 @@ function wrapTitle(value: string, width = 34) {
   return lines.slice(0, 4).join("\n");
 }
 
+let reloadableWriteGeneration = 0;
+async function writeReloadableText(file: string, value: string) {
+  const temporary = `${file}.${process.pid}.${++reloadableWriteGeneration}.tmp`;
+  await writeFile(temporary, value);
+  try {
+    await rename(temporary, file);
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => {});
+    throw error;
+  }
+}
 export async function writeLoadingItem(c: Config, item: PlaylistItem) {
   const title = upNextTitleFile(c);
   const thumbnail = upNextThumbnailFile(c);
   await mkdir(path.dirname(title), { recursive: true });
-  await writeFile(title, wrapTitle(item.title));
+  await writeReloadableText(title, wrapTitle(item.title));
   try {
     const url = new URL(item.thumbnail);
     if (
@@ -79,7 +90,7 @@ export async function writeLoadingStatus(
 ) {
   const file = loadingFile(c);
   await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, loadingText(activity));
+  await writeReloadableText(file, loadingText(activity));
 }
 
 export function encodeArgs(
@@ -142,6 +153,7 @@ export function standby(
   const controller = new AbortController();
   const combined = AbortSignal.any([signal, controller.signal]);
   let lastErrorReport = 0;
+  let minimalContinuity = false;
   const reportError = (reason?: string) => {
     const now = Date.now();
     if (now - lastErrorReport < 15000) return;
@@ -165,6 +177,41 @@ export function standby(
         ).catch((error: NodeJS.ErrnoException) => {
           if (error.code !== "EEXIST") throw error;
         });
+        if (minimalContinuity) {
+          const child = launch(
+            c.FFMPEG_PATH,
+            [
+              "-hide_banner",
+              "-loglevel",
+              "error",
+              "-re",
+              "-f",
+              "lavfi",
+              "-i",
+              `color=c=0x101216:s=${s.width}x${s.height}:r=${s.fps}`,
+              "-f",
+              "lavfi",
+              "-i",
+              `anullsrc=r=${audioSampleRate(s)}:cl=stereo`,
+              "-map",
+              "0:v:0",
+              "-map",
+              "1:a:0",
+              ...encodeArgs(s, c.UDP_BASE_PORT, (Date.now() - epoch) / 1000),
+            ],
+            combined,
+          );
+          child.stdout?.resume();
+          const code = await completion(child);
+          if (combined.aborted) break;
+          reportError(
+            code === 0
+              ? "minimal standby producer ended unexpectedly"
+              : mediaFailure(child),
+          );
+          await delay(5000, combined);
+          continue;
+        }
         // Standby has its own text files; it must never overwrite the live
         // title/date files while the next source is being prepared.
         const ov = await overlay(
@@ -278,13 +325,14 @@ export function standby(
         child.stdout?.resume();
         const code = await completion(child);
         if (combined.aborted) break;
-        reportError(
-          code === 0
-            ? "standby producer ended unexpectedly"
-            : mediaFailure(child),
-        );
+        const reason = code === 0
+          ? "standby producer ended unexpectedly"
+          : mediaFailure(child);
+        minimalContinuity = true;
+        reportError(reason);
       } catch (error) {
         if (combined.aborted) break;
+        minimalContinuity = true;
         reportError(
           error instanceof Error ? error.message : "standby producer failed",
         );

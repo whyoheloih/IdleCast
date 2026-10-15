@@ -3,6 +3,16 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.6.6",
+    date: "Oct 14, 2026",
+    title: "Transition preload and standby continuity repair",
+    items: [
+      "Rolling-buffer downloads now prioritize the same next entry selected by Series and long-video playback rules",
+      "Standby progress and title files update atomically so FFmpeg cannot read partially written overlay text",
+      "If the decorated standby overlay fails, a plain encoded continuity screen automatically keeps the outgoing stream alive",
+    ],
+  },
+  {
     version: "1.6.5",
     date: "Oct 14, 2026",
     title: "Packaged FFmpeg merge repair",

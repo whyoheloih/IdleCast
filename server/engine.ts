@@ -24,13 +24,10 @@ import {
 } from "./process.js";
 import {
   prepareQueue,
-  canStartSeriesBlock,
+  followsNormalPlaybackRules,
   seriesStateAfterActivation,
   SERIES_BLOCK_GAP,
   isLongVideo,
-  canStartShuffledQueue,
-  needsLongDownloadLead,
-  DOWNLOAD_LEAD_SECONDS,
   LONG_VIDEO_SECONDS,
 } from "./queue.js";
 import { playlistId as parsePlaylistId } from "./config.js";
@@ -838,7 +835,23 @@ export class Engine extends EventEmitter {
       controllingMarathon.committedQueue.every((entry) => completedCommitments.has(entry.entryId))
     ));
     const handoffOwnsStartup = !!this.normalHandoffPlan();
-    const initial = this.bufferCandidates(this.store.all());
+    const startupItems = this.store.all();
+    const startupCursor = this.store.get<{ id: string; offset: number } | null>(
+      "cursor",
+      null,
+    );
+    const startupCursorIndex = Math.max(
+      0,
+      startupItems.findIndex((item) => item.id === startupCursor?.id),
+    );
+    const startupStart = this.normalEligibleStart(
+      startupItems,
+      startupCursorIndex,
+      s,
+      true,
+      startupCursor && startupCursor.offset > 0 ? startupCursor.id : "",
+    );
+    const initial = this.bufferCandidates(startupItems, startupStart);
     this.bufferTarget = marathonOwnsStartup || handoffOwnsStartup ? 0 : Math.min(this.startupBufferTarget, initial.length);
     for (const item of initial.slice(0, this.bufferTarget))
       if (!this.cachedSizes.has(item.videoId))
@@ -862,6 +875,7 @@ export class Engine extends EventEmitter {
           this.store.all(),
           signal,
           this.bufferTarget,
+          startupStart,
         );
         // Permanently failed/retry-delayed items cannot hold startup at 3/3
         // forever. Start once every currently eligible finite item is ready.
@@ -1192,6 +1206,68 @@ export class Engine extends EventEmitter {
     });
   }
 
+  private normalRuleContext(settings: Settings) {
+    return {
+      shuffle: settings.shuffle,
+      shortStartsRemaining: settings.shuffle
+        ? this.store.get(
+            "shuffleShortStartsRemaining",
+            this.store.get("shuffleNeedsShortStart", true) ? 2 : 0,
+          )
+        : 0,
+      activeSeriesKey: this.store.get("activeSeriesBlockKey", ""),
+      ordinaryVideosSinceSeries: this.store.get<number>(
+        "ordinaryVideosSinceSeries",
+        SERIES_BLOCK_GAP,
+      ),
+      lastVideoDuration: this.store.get<number | null>(
+        "lastVideoDuration",
+        null,
+      ),
+    };
+  }
+
+  private normalEligibleStart(
+    items: StoredItem[],
+    startIndex: number,
+    settings: Settings,
+    includeStart: boolean,
+    resumeId = "",
+  ) {
+    if (!items.length) return 0;
+    const context = this.normalRuleContext(settings);
+    for (
+      let offset = includeStart ? 0 : 1;
+      offset < items.length + (includeStart ? 0 : 1);
+      offset++
+    ) {
+      const index = (startIndex + offset) % items.length;
+      const candidate = items[index];
+      if (
+        candidate.available &&
+        candidate.retryAt <= Date.now() &&
+        followsNormalPlaybackRules(candidate, {
+          ...context,
+          resuming: candidate.id === resumeId,
+        })
+      )
+        return index;
+    }
+    return includeStart ? startIndex : (startIndex + 1) % items.length;
+  }
+
+  private normalRefillStart(
+    items: StoredItem[],
+    currentIndex: number,
+    settings: Settings,
+  ) {
+    return this.normalEligibleStart(
+      items,
+      currentIndex,
+      settings,
+      false,
+    );
+  }
   private async probeMedia(file: string, signal: AbortSignal) {
     const info = JSON.parse(
       await runCapture(
@@ -1687,43 +1763,17 @@ export class Engine extends EventEmitter {
         "ordinaryVideosSinceSeries",
         SERIES_BLOCK_GAP,
       );
-      const followsShuffleRules = (candidate: StoredItem, resuming = false) => {
-        if (resuming) return true;
-        if (
-          !canStartSeriesBlock(
-            candidate,
-            activeSeriesKey,
-            ordinaryVideosSinceSeries,
-          )
-        )
-          return false;
-        if (!s.shuffle) return true;
-        if (
-          candidate.seriesKey &&
-          candidate.seriesKey === activeSeriesKey &&
-          ordinaryVideosSinceSeries === 0
-        )
-          return true;
-        if (needsLongDownloadLead(candidate))
-          return (
-            lastVideoDuration !== null &&
-            lastVideoDuration >= DOWNLOAD_LEAD_SECONDS
-          );
-        return !(
-          lastVideoDuration !== null &&
-          lastVideoDuration > LONG_VIDEO_SECONDS &&
-          isLongVideo(candidate)
-        );
-      };
       const canPlay = (candidate: StoredItem, resuming = false) =>
         candidate.available &&
         candidate.retryAt <= Date.now() &&
-        !(
-          shortStartsRemaining > 0 &&
-          !resuming &&
-          !canStartShuffledQueue(candidate)
-        ) &&
-        followsShuffleRules(candidate, resuming);
+        followsNormalPlaybackRules(candidate, {
+          shuffle: s.shuffle,
+          resuming,
+          shortStartsRemaining,
+          activeSeriesKey,
+          ordinaryVideosSinceSeries,
+          lastVideoDuration,
+        });
       if (!item) for (let k = 0; k < items.length; k++) {
         const candidate = items[(index + k) % items.length];
         const resuming = candidate.id === saved?.id && saved.offset > 0;
@@ -1972,7 +2022,13 @@ export class Engine extends EventEmitter {
           this.store.set("lastVideoSeries", item.seriesKey ?? "");
           this.store.set("cursor", { id: item.id, offset });
           if (handoff) this.scheduleOwnedRefill(source, signal);
-          else this.scheduleRefill(source, items, signal, index);
+          else
+            this.scheduleRefill(
+              source,
+              items,
+              signal,
+              this.normalRefillStart(items, index, s),
+            );
         }
         this.event();
         let lastProgress = Date.now(),
@@ -2291,7 +2347,10 @@ export class Engine extends EventEmitter {
       0,
       items.findIndex((item) => item.id === this.current?.id),
     );
-    const wanted = this.bufferCandidates(items, at)
+    const refillAt = this.current
+      ? this.normalRefillStart(items, at, this.store.settings())
+      : at;
+    const wanted = this.bufferCandidates(items, refillAt)
       .slice(0, this.bufferLimit)
       .map((item) => item.videoId);
     const wantedSet = new Set(wanted);
@@ -2323,7 +2382,10 @@ export class Engine extends EventEmitter {
         0,
         items.findIndex((item) => item.id === this.current?.id),
       );
-      const wanted = this.bufferCandidates(items, at).slice(0, this.bufferLimit);
+      const refillAt = this.current
+        ? this.normalRefillStart(items, at, this.store.settings())
+        : at;
+      const wanted = this.bufferCandidates(items, refillAt).slice(0, this.bufferLimit);
       const wantedIds = new Set(wanted.map((item) => item.videoId));
       this.activeSource.retain?.([...wantedIds]);
       for (const id of [...this.bufferedIds])
@@ -2338,7 +2400,7 @@ export class Engine extends EventEmitter {
         this.activeSource,
         items,
         this.controller.signal,
-        at,
+        refillAt,
       );
     };
     void refresh().finally(() => {

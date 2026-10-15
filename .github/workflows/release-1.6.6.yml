@@ -1,18 +1,18 @@
-name: Build and publish IdleCast 1.6.5
+name: Build and publish IdleCast 1.6.6
 
 on:
   push:
     branches:
       - main
     paths:
-      - .github/workflows/release-1.6.5.yml
+      - .github/workflows/release-1.6.6.yml
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: idlecast-release-1.6.5
+  group: idlecast-release-1.6.6
   cancel-in-progress: false
 
 jobs:
@@ -64,9 +64,9 @@ jobs:
         shell: pwsh
         run: |
           $files = @(
-            "release/IdleCast-Setup-1.6.5-x64.exe",
-            "release/IdleCast-Setup-1.6.5-x64.exe.blockmap",
-            "release/IdleCast-Portable-1.6.5-x64.exe",
+            "release/IdleCast-Setup-1.6.6-x64.exe",
+            "release/IdleCast-Setup-1.6.6-x64.exe.blockmap",
+            "release/IdleCast-Portable-1.6.6-x64.exe",
             "release/latest.yml"
           )
           foreach ($file in $files) {
@@ -91,19 +91,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $files = @(
-            "release/IdleCast-Setup-1.6.5-x64.exe",
-            "release/IdleCast-Setup-1.6.5-x64.exe.blockmap",
-            "release/IdleCast-Portable-1.6.5-x64.exe",
+            "release/IdleCast-Setup-1.6.6-x64.exe",
+            "release/IdleCast-Setup-1.6.6-x64.exe.blockmap",
+            "release/IdleCast-Portable-1.6.6-x64.exe",
             "release/latest.yml"
           )
           $notes = @"
-          IdleCast 1.6.5 repairs media merging and playback by bundling the real standalone FFmpeg and FFprobe executables alongside yt-dlp, then validating all three inside the packaged app.
+          IdleCast 1.6.6 prioritizes the actual next eligible video in the rolling buffer and hardens transition standby output.
 
-          Failed prepared media is fully evicted, individual missing local files no longer block later playable entries, cookie fallback starts with the stable public client, and the complete automated and browser workflows pass.
+          Standby title and progress updates are atomic, and a plain continuity encoder automatically takes over if the decorated overlay cannot load.
           "@
-          if (gh release view v1.6.5 --repo ${{ github.repository }} 2>$null) {
-            gh release upload v1.6.5 @files --clobber --repo ${{ github.repository }}
-            gh release edit v1.6.5 --title "IdleCast 1.6.5" --notes "$notes" --latest --repo ${{ github.repository }}
+          if (gh release view v1.6.6 --repo ${{ github.repository }} 2>$null) {
+            gh release upload v1.6.6 @files --clobber --repo ${{ github.repository }}
+            gh release edit v1.6.6 --title "IdleCast 1.6.6" --notes "$notes" --latest --repo ${{ github.repository }}
           } else {
-            gh release create v1.6.5 @files --target ${{ github.sha }} --title "IdleCast 1.6.5" --notes "$notes" --latest --repo ${{ github.repository }}
+            gh release create v1.6.6 @files --target ${{ github.sha }} --title "IdleCast 1.6.6" --notes "$notes" --latest --repo ${{ github.repository }}
           }

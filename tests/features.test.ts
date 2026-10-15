@@ -9,6 +9,7 @@ import {
   estimatedDownloadGb,
   prepareQueue,
   canStartSeriesBlock,
+  followsNormalPlaybackRules,
   seriesStateAfterActivation,
   SERIES_BLOCK_GAP,
 } from "../server/queue.js";
@@ -247,6 +248,36 @@ test("custom filters group numbered series, override content limits, and preserv
   );
 });
 
+test("buffer priority uses the same series eligibility as playback", () => {
+  const common = {
+    shuffle: true,
+    shortStartsRemaining: 0,
+    activeSeriesKey: "dead by daylight",
+    ordinaryVideosSinceSeries: 0,
+    lastVideoDuration: 600,
+  };
+  const item = (seriesKey: string) => ({
+    id: seriesKey,
+    videoId: (seriesKey + "00000000000").slice(0, 11),
+    position: 0,
+    title: seriesKey,
+    channel: "Test",
+    thumbnail: "",
+    available: true,
+    duration: 600,
+    seriesKey,
+  });
+  assert.equal(
+    followsNormalPlaybackRules(item("elden ring"), common),
+    false,
+    "a different series cannot consume preload priority during the active block",
+  );
+  assert.equal(
+    followsNormalPlaybackRules(item("dead by daylight"), common),
+    true,
+    "the authoritative next episode remains preloadable",
+  );
+});
 test("series blocks override long adjacency and require five ordinary videos between blocks", () => {
   const make = (id: string, title: string, duration = 300) => ({
     id,

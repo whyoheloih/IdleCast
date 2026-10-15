@@ -96,6 +96,53 @@ export function canStartShuffledQueue(item: PlaylistItem) {
   );
 }
 
+export type NormalPlaybackRuleContext = {
+  shuffle: boolean;
+  resuming?: boolean;
+  shortStartsRemaining: number;
+  activeSeriesKey: string;
+  ordinaryVideosSinceSeries: number;
+  lastVideoDuration: number | null;
+};
+
+/** Keep buffer priority and authoritative playback selection on identical rules. */
+export function followsNormalPlaybackRules(
+  candidate: PlaylistItem,
+  context: NormalPlaybackRuleContext,
+) {
+  if (context.resuming) return true;
+  if (
+    context.shortStartsRemaining > 0 &&
+    !canStartShuffledQueue(candidate)
+  )
+    return false;
+  if (
+    !canStartSeriesBlock(
+      candidate,
+      context.activeSeriesKey,
+      context.ordinaryVideosSinceSeries,
+    )
+  )
+    return false;
+  if (!context.shuffle) return true;
+  if (
+    candidate.seriesKey &&
+    candidate.seriesKey === context.activeSeriesKey &&
+    context.ordinaryVideosSinceSeries === 0
+  )
+    return true;
+  if (needsLongDownloadLead(candidate))
+    return (
+      context.lastVideoDuration !== null &&
+      context.lastVideoDuration >= DOWNLOAD_LEAD_SECONDS
+    );
+  return !(
+    context.lastVideoDuration !== null &&
+    context.lastVideoDuration > LONG_VIDEO_SECONDS &&
+    isLongVideo(candidate)
+  );
+}
+
 export function canFollowInShuffledQueue(
   previous: PlaylistItem,
   candidate: PlaylistItem,
