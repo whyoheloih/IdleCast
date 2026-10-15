@@ -474,7 +474,7 @@ test("real FFmpeg loop skips unavailable files, survives one failed output, and 
     ]);
     await engine.start();
     await delay(5000, signal());
-    assert.equal(engine.state, "waiting");
+    assert.equal(engine.state, "buffering");
     await engine.stop();
     assert.ok(
       (await stat(received)).size > 1000,

@@ -3,6 +3,15 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.6.8",
+    date: "Oct 15, 2026",
+    title: "Strict startup verification",
+    items: [
+      "Verification now reflects that YouTube startup remains in buffering until all three validated logical entries are ready",
+      "Includes the three-entry playback buffer, queue ownership protection, and downloader account-verification recovery introduced in 1.6.7",
+    ],
+  },
+  {
     version: "1.6.7",
     date: "Oct 15, 2026",
     title: "Three-video buffer and downloader recovery",
