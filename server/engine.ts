@@ -29,6 +29,7 @@ import {
   SERIES_BLOCK_GAP,
   isLongVideo,
   LONG_VIDEO_SECONDS,
+  NORMAL_BUFFER_COUNT,
 } from "./queue.js";
 import { playlistId as parsePlaylistId } from "./config.js";
 import { diagnosticForMessage, sanitizeDiagnosticRuntime } from "./diagnostics.js";
@@ -124,16 +125,18 @@ export class Engine extends EventEmitter {
   private currentMedia: { file: string; duration: number } | null = null;
   private download: DownloadActivity | null = null;
   private bufferedIds = new Set<string>();
+  private bufferedEntries = new Map<string, string>();
   private preparedMedia = new Map<string, PreparedMedia>();
+  private bufferReservations = new Set<string>();
   private downloadStates = new Map<string, DownloadActivity>();
   private downloadJobPersistence = new Map<string, { at: number; signature: string }>();
   private cachedSizes = new Map<string, number>();
   private refillTask: Promise<void> | null = null;
   private ownedRefillPending = false;
-  private readonly bufferLimit = 5;
-  private readonly startupBufferTarget = 3;
+  private readonly bufferLimit = NORMAL_BUFFER_COUNT;
+  private readonly startupBufferTarget = NORMAL_BUFFER_COUNT;
   private bufferedCount = 0;
-  private bufferTarget = 3;
+  private bufferTarget = NORMAL_BUFFER_COUNT;
   private activeSource: MediaSourceProvider | null = null;
   private queueRefreshPending = false;
   private activationGeneration = 0;
@@ -239,28 +242,93 @@ export class Engine extends EventEmitter {
     this.event("Recovery circuit reset after a successful media preparation", "info");
   }
   private queueReadiness() {
-    const queue = this.downloadQueue();
-    const upcoming = queue.entries
-      .filter((entry) => !(entry.current && this.state === "playing"))
-      .slice(0, this.bufferTarget);
-    const target = upcoming.length
-      ? Math.min(this.bufferTarget, upcoming.length)
-      : this.bufferTarget;
-    const ready = upcoming.filter((entry) => entry.status === "downloaded").length;
-    const blocked = upcoming.filter((entry) => !!entry.error).length;
+    const controlling = this.store.controllingMarathon();
+    if (controlling && ["active", "ending"].includes(controlling.marathon.status)) {
+      const windowSize = controlling.marathon.status === "ending" ? 1 : 2;
+      const window = controlling.entries
+        .filter((entry) => entry.position >= controlling.marathon.currentPosition)
+        .slice(0, windowSize);
+      const entries = window.map((entry) => {
+        const item = this.marathonItem(entry);
+        const activity = this.downloadStates.get(item.videoId);
+        const ready = this.preparedMedia.has(`marathon:${entry.id}`);
+        return {
+          id: entry.id,
+          title: entry.title,
+          status: ready
+            ? "ready"
+            : entry.lastError || activity?.error
+              ? "failed"
+              : activity?.phase ?? activity?.status ?? "queued",
+          percent: ready ? 100 : activity?.percent ?? 0,
+          diagnosticCode: activity?.diagnosticCode ?? null,
+          error: activity?.error ?? entry.lastError ?? null,
+        };
+      });
+      const ready = entries.filter((entry) => entry.status === "ready").length;
+      const blocked = entries.filter((entry) => !!entry.error).length;
+      return {
+        status: blocked ? "blocked" : entries.length > 0 && ready >= entries.length ? "ready" : entries.length ? "preparing" : "empty",
+        ready,
+        target: entries.length,
+        blocked,
+        entries,
+      };
+    }
+    const items = this.store.all();
+    const current =
+      this.current &&
+      this.state === "playing" &&
+      this.bufferedEntries.has(this.current.id) &&
+      this.preparedMedia.has(this.current.videoId)
+        ? this.current
+        : null;
+    const target = this.bufferTarget;
+    const settings = this.store.settings();
+    const saved = this.store.get<{ id: string; offset: number } | null>("cursor", null);
+    const currentIndex = Math.max(
+      0,
+      items.findIndex((item) => item.id === (this.state === "playing" ? this.current?.id : saved?.id)),
+    );
+    const startIndex = this.state === "playing" && this.current
+      ? this.normalRefillStart(items, currentIndex, settings)
+      : this.normalEligibleStart(
+          items,
+          currentIndex,
+          settings,
+          true,
+          saved && saved.offset > 0 ? saved.id : "",
+        );
+    const upcoming = this.bufferCandidates(items, startIndex)
+      .filter((item) => item.id !== current?.id)
+      .slice(0, Math.max(0, target - (current ? 1 : 0)));
+    const readinessItems = current ? [current, ...upcoming] : upcoming;
+    const entries = readinessItems.map((item) => {
+      const activity = this.downloadStates.get(item.videoId);
+      const ready =
+        this.bufferedEntries.has(item.id) &&
+        this.preparedMedia.has(item.videoId);
+      return {
+        id: item.id,
+        title: item.title,
+        status: ready
+          ? "ready"
+          : item.error || activity?.error
+            ? "failed"
+            : activity?.phase ?? activity?.status ?? "queued",
+        percent: ready ? 100 : activity?.percent ?? 0,
+        diagnosticCode: activity?.diagnosticCode ?? null,
+        error: activity?.error ?? item.error ?? null,
+      };
+    });
+    const ready = entries.filter((entry) => entry.status === "ready").length;
+    const blocked = entries.filter((entry) => !!entry.error).length;
     return {
-      status: blocked ? "blocked" : ready >= target ? "ready" : upcoming.length ? "preparing" : "empty",
+      status: blocked ? "blocked" : target > 0 && ready >= target ? "ready" : entries.length ? "preparing" : "empty",
       ready,
       target,
       blocked,
-      entries: upcoming.map((entry) => ({
-        id: entry.id,
-        title: entry.title,
-        status: entry.status,
-        percent: entry.percent,
-        diagnosticCode: entry.diagnosticCode ?? null,
-        error: entry.error ?? null,
-      })),
+      entries,
     };
   }
   private recoverySummaries() {
@@ -501,7 +569,14 @@ export class Engine extends EventEmitter {
     if (this.recoveryTask || signal.aborted) return;
     const incident = this.recoveryIncident();
     if (!incident || !["recovering", "paused"].includes(incident.status)) return;
-    if (incident.status === "paused" && incident.sourceType === "youtube") return;
+    if (incident.status === "paused" && incident.sourceType === "youtube") {
+      const retryAt = (incident.lastAttemptAt || incident.startedAt) + 15 * 60_000;
+      if (Date.now() < retryAt || this.activeRecoveryCircuit()) return;
+      incident.status = "recovering";
+      incident.lastError = "Rechecking YouTube access after the bounded authentication cooldown";
+      this.saveRecoveryIncident(incident);
+      this.event(`Emergency recovery is rechecking YouTube access after its authentication cooldown: ${incident.intendedTitle}`, "warn", { incidentId: incident.id, entryId: incident.intendedEntryId, attempts: incident.attempts });
+    }
     this.recoveryTask = this.runRecovery(source, signal)
       .catch(() => {})
       .finally(() => { this.recoveryTask = null; });
@@ -601,7 +676,7 @@ export class Engine extends EventEmitter {
       this.store.set("cursor", next ? { id: next.id, offset: 0 } : null);
     }
     this.preparedMedia.delete(incident.preparedKey);
-    this.bufferedIds.delete(incident.intendedVideoId);
+    this.forgetBufferedVideo(incident.intendedVideoId);
     this.downloadStates.delete(incident.intendedVideoId);
     this.cachedSizes.delete(incident.intendedVideoId);
     if (incident.sourceType === "youtube") await source.remove?.(incident.intendedVideoId).catch(() => {});
@@ -611,13 +686,16 @@ export class Engine extends EventEmitter {
   }
   private downloadQueue() {
     const items = this.store.all();
-    const currentId = this.current?.videoId;
+    const currentId = this.current?.id;
     const active = this.download;
     const visible = items.filter((item) =>
-      item.videoId === currentId ||
-      this.bufferedIds.has(item.videoId) ||
+      item.id === currentId ||
+      this.bufferedEntries.has(item.id) ||
       this.downloadStates.has(item.videoId) ||
       this.cachedSizes.has(item.videoId),
+    );
+    const logicalOrder = new Map(
+      [...this.bufferedEntries.keys()].map((entryId, index) => [entryId, index]),
     );
     const entries = visible.map((item) => {
       const prepared = this.preparedMedia.get(item.videoId);
@@ -630,7 +708,7 @@ export class Engine extends EventEmitter {
         thumbnail: item.thumbnail,
         seriesKey: item.seriesKey,
         seriesIndex: item.seriesIndex,
-        current: item.videoId === currentId,
+        current: item.id === currentId,
         status: activity?.status ?? (prepared || this.cachedSizes.has(item.videoId) ? "downloaded" : "queued"),
         percent: activity?.percent ?? (prepared || this.cachedSizes.has(item.videoId) ? 100 : 0),
         attempt: activity?.attempt ?? 0,
@@ -645,7 +723,12 @@ export class Engine extends EventEmitter {
         diagnosticCode: activity?.diagnosticCode,
         error: activity?.error ?? item.error,
       };
-    }).sort((a, b) => Number(b.current) - Number(a.current) || a.position - b.position);
+    }).sort((a, b) =>
+      Number(b.current) - Number(a.current) ||
+      (logicalOrder.get(a.id) ?? Number.MAX_SAFE_INTEGER) -
+        (logicalOrder.get(b.id) ?? Number.MAX_SAFE_INTEGER) ||
+      a.position - b.position,
+    );
     return {
       entries,
       totalBytes: entries.reduce((sum, entry) => sum + entry.bytes, 0),
@@ -822,6 +905,7 @@ export class Engine extends EventEmitter {
     this.activeSource = source;
     let workers: Promise<void>[] = [];
     this.bufferedIds.clear();
+    this.bufferedEntries.clear();
     this.preparedMedia.clear();
     this.bufferedCount = 0;
     const controllingMarathon = this.store.controllingMarathon()?.marathon;
@@ -852,7 +936,15 @@ export class Engine extends EventEmitter {
       startupCursor && startupCursor.offset > 0 ? startupCursor.id : "",
     );
     const initial = this.bufferCandidates(startupItems, startupStart);
-    this.bufferTarget = marathonOwnsStartup || handoffOwnsStartup ? 0 : Math.min(this.startupBufferTarget, initial.length);
+    const localLibraryTarget = Math.min(
+      this.startupBufferTarget,
+      startupItems.filter((item) => item.available).length,
+    );
+    this.bufferTarget = marathonOwnsStartup || handoffOwnsStartup
+      ? 0
+      : s.mediaSource === "local"
+        ? Math.max(1, localLibraryTarget)
+        : this.startupBufferTarget;
     for (const item of initial.slice(0, this.bufferTarget))
       if (!this.cachedSizes.has(item.videoId))
         this.downloadStates.set(item.videoId, {
@@ -869,7 +961,8 @@ export class Engine extends EventEmitter {
     if (controllingMarathon?.status === "ending")
       this.event("Ending state recovered after restart; the unfinished Marathon entry will finish before normal playback resumes", "info", { marathonId: controllingMarathon.id, entryId: controllingMarathon.currentEntryId });
     this.task = (async () => {
-      while (!signal.aborted && this.bufferedIds.size < this.bufferTarget) {
+      let startupNotice = "";
+      while (!signal.aborted && this.bufferedEntries.size < this.bufferTarget) {
         await this.fillBuffer(
           source,
           this.store.all(),
@@ -877,22 +970,20 @@ export class Engine extends EventEmitter {
           this.bufferTarget,
           startupStart,
         );
-        // Permanently failed/retry-delayed items cannot hold startup at 3/3
-        // forever. Start once every currently eligible finite item is ready.
         const eligibleNow = this.bufferCandidates(this.store.all()).length;
-        this.bufferTarget = Math.min(
-          this.bufferTarget,
-          Math.max(this.bufferedIds.size, eligibleNow),
-        );
-        if (this.bufferedIds.size < this.bufferTarget) {
-          this.event(
+        if (this.bufferedEntries.size < this.bufferTarget) {
+          const notice =
             "Startup buffer " +
-              this.bufferedIds.size +
-              "/" +
-              this.bufferTarget +
-              "; retrying unavailable downloads",
-            "warn",
-          );
+            this.bufferedEntries.size +
+            "/" +
+            this.bufferTarget +
+            (eligibleNow < this.bufferTarget
+              ? "; only " + eligibleNow + " eligible queue entries are currently available"
+              : "; waiting for remaining downloads and validation");
+          if (notice !== startupNotice) {
+            startupNotice = notice;
+            this.event(notice, "warn");
+          }
           await delay(5000, signal);
         }
       }
@@ -905,15 +996,20 @@ export class Engine extends EventEmitter {
         };
       this.event(
         "Startup buffer ready: " +
-          this.bufferedIds.size +
+          this.bufferedEntries.size +
           "/" +
           this.bufferTarget +
           " videos",
       );
-      this.bufferTarget = Math.min(
-        this.bufferLimit,
-        this.bufferCandidates(this.store.all()).length,
-      );
+      this.bufferTarget = s.mediaSource === "local"
+        ? Math.max(
+            1,
+            Math.min(
+              this.bufferLimit,
+              this.store.all().filter((item) => item.available).length,
+            ),
+          )
+        : this.bufferLimit;
       workers = (["youtube", "twitch"] as const).map((name, n) =>
         s[name].enabled
           ? this.output(name, s, this.config.UDP_BASE_PORT + n, signal)
@@ -966,6 +1062,7 @@ export class Engine extends EventEmitter {
         this.current = null;
         this.download = null;
         this.bufferedIds.clear();
+        this.bufferedEntries.clear();
         this.preparedMedia.clear();
         this.bufferedCount = 0;
         this.task = null;
@@ -1190,20 +1287,35 @@ export class Engine extends EventEmitter {
         0,
         items.findIndex((item) => item.id === saved?.id),
       );
-    const seen = new Set<string>();
     return Array.from(
       { length: items.length },
       (_, offset) => items[(start + offset) % items.length],
-    ).filter((item) => {
-      if (
-        !item.available ||
-        item.retryAt > Date.now() ||
-        seen.has(item.videoId)
-      )
-        return false;
-      seen.add(item.videoId);
-      return true;
-    });
+    ).filter((item) => item.available && item.retryAt <= Date.now());
+  }
+
+  private refreshBufferedCount() {
+    this.bufferedCount = this.bufferedEntries.size;
+  }
+
+  private forgetBufferedVideo(videoId: string) {
+    this.bufferedIds.delete(videoId);
+    for (const [entryId, bufferedVideoId] of this.bufferedEntries)
+      if (bufferedVideoId === videoId) this.bufferedEntries.delete(entryId);
+    this.refreshBufferedCount();
+  }
+
+  private releaseBufferedEntry(entryId: string, videoId: string) {
+    this.bufferedEntries.delete(entryId);
+    const bufferedStillNeeded = [...this.bufferedEntries.values()].includes(videoId);
+    const ownedElsewhere = [...this.preparedMedia.entries()].some(
+      ([key, prepared]) => key !== videoId && prepared.videoId === videoId,
+    );
+    if (!bufferedStillNeeded) {
+      this.bufferedIds.delete(videoId);
+      if (ownedElsewhere) this.preparedMedia.delete(videoId);
+    }
+    this.refreshBufferedCount();
+    return bufferedStillNeeded || ownedElsewhere;
   }
 
   private normalRuleContext(settings: Settings) {
@@ -1310,85 +1422,124 @@ export class Engine extends EventEmitter {
       return;
     }
     const candidates = this.bufferCandidates(items, startIndex);
-    const wanted = Math.min(target, candidates.length);
-    for (const item of candidates.slice(0, wanted))
+    const currentEntryId =
+      this.state === "playing" &&
+      this.current &&
+      this.bufferedEntries.has(this.current.id)
+        ? this.current.id
+        : null;
+    const desiredUpcoming = candidates
+      .filter((item) => item.id !== currentEntryId)
+      .slice(0, Math.max(0, target - (currentEntryId ? 1 : 0)));
+    const desiredEntryIds = new Set(desiredUpcoming.map((item) => item.id));
+    if (currentEntryId) desiredEntryIds.add(currentEntryId);
+    for (const [entryId, videoId] of [...this.bufferedEntries]) {
+      if (desiredEntryIds.has(entryId)) continue;
+      const stillNeeded = this.releaseBufferedEntry(entryId, videoId);
+      if (!stillNeeded) {
+        this.preparedMedia.delete(videoId);
+        this.downloadStates.delete(videoId);
+        this.cachedSizes.delete(videoId);
+      }
+    }
+    const openSlots = Math.max(0, target - this.bufferedEntries.size);
+    const planned = desiredUpcoming
+      .filter((item) => !this.bufferedEntries.has(item.id))
+      .slice(0, openSlots);
+    const wanted = this.bufferedEntries.size + planned.length;
+    for (const item of planned)
       if (!this.bufferedIds.has(item.videoId) && !this.cachedSizes.has(item.videoId) && !this.downloadStates.has(item.videoId))
         this.downloadStates.set(item.videoId, {
           videoId: item.videoId, title: item.title, thumbnail: item.thumbnail,
           percent: 0, status: "queued", attempt: 0,
         });
-    source.retain?.([
-      ...this.bufferedIds,
-      ...candidates.slice(0, wanted).map((item) => item.videoId),
-    ]);
-    for (const item of candidates) {
-      if (this.bufferedIds.size >= wanted) break;
-      if (this.bufferedIds.has(item.videoId)) continue;
-      signal.throwIfAborted();
-      this.current = this.state === "buffering" ? item : this.current;
-      await writeLoadingItem(this.config, item).catch(() => {});
-      this.event(
-        "Buffering " +
-          (this.bufferedIds.size + 1) +
-          "/" +
-          wanted +
-          ": " +
-          item.title,
-      );
-      try {
-        const file = await source.resolve(item, signal);
-        this.clearRecoveryCircuits();
-        let info;
-        try {
-          info = await this.probeMedia(file, signal);
-        } catch (error) {
-          // Never reopen the same corrupt or truncated cache entry forever.
-          await source.remove?.(item.videoId).catch((cleanupError) =>
-            this.event(`Cache cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : "unknown error"}`, "warn", { videoId: item.videoId }),
-          );
-          throw error;
+    const reservations = planned.map((item) => item.videoId);
+    for (const videoId of reservations) this.bufferReservations.add(videoId);
+    source.retain?.(this.retainedVideoIds());
+    try {
+      for (const item of planned) {
+        if (this.bufferedEntries.has(item.id)) continue;
+        const shared = this.preparedMedia.get(item.videoId);
+        if (this.bufferedIds.has(item.videoId) && shared) {
+          this.bufferedEntries.set(item.id, item.videoId);
+          this.refreshBufferedCount();
+          this.event();
+          continue;
         }
-        const size = (await stat(file)).size;
-        this.preparedMedia.set(item.videoId, { file, info, size, owner: "normal", logicalId: item.id, videoId: item.videoId });
-        this.cachedSizes.set(item.videoId, size);
-        this.downloadStates.set(item.videoId, {
-          videoId: item.videoId,
-          title: item.title,
-          thumbnail: item.thumbnail,
-          percent: 100,
-          status: "downloaded",
-          attempt: this.downloadStates.get(item.videoId)?.attempt ?? 1,
-          bytes: size,
-        });
-        this.bufferedIds.add(item.videoId);
-        this.bufferedCount = this.bufferedIds.size;
-        this.download = null;
-        this.event();
-      } catch (error) {
-        if (signal.aborted) throw error;
-        const message =
-          error instanceof Error ? error.message : "Media download failed";
-        // Keep the logical queue position eligible. If this entry reaches
-        // playback before background preparation succeeds, the play loop
-        // opens one durable recovery incident instead of silently skipping it.
+        signal.throwIfAborted();
+        this.current = this.state === "buffering" ? item : this.current;
+        await writeLoadingItem(this.config, item).catch(() => {});
         this.event(
-          "Media failed while buffering: " +
-            item.title +
-            " \u2014 " +
-            message,
-          "warn",
+          "Buffering " +
+            (this.bufferedEntries.size + 1) +
+            "/" +
+            wanted +
+            ": " +
+            item.title,
         );
-        this.recordRecoveryCircuitFailure(message);
-        if (pausesDownloadQueue(message)) {
+        try {
+          const file = await source.resolve(item, signal);
+          this.clearRecoveryCircuits();
+          let info;
+          try {
+            info = await this.probeMedia(file, signal);
+          } catch (error) {
+            // Never reopen the same corrupt or truncated cache entry forever.
+            await source.remove?.(item.videoId).catch((cleanupError) =>
+              this.event(`Cache cleanup failed: ${cleanupError instanceof Error ? cleanupError.message : "unknown error"}`, "warn", { videoId: item.videoId }),
+            );
+            throw error;
+          }
+          const size = (await stat(file)).size;
+          this.preparedMedia.set(item.videoId, { file, info, size, owner: "normal", logicalId: item.id, videoId: item.videoId });
+          this.cachedSizes.set(item.videoId, size);
+          this.downloadStates.set(item.videoId, {
+            videoId: item.videoId,
+            title: item.title,
+            thumbnail: item.thumbnail,
+            percent: 100,
+            status: "downloaded",
+            attempt: this.downloadStates.get(item.videoId)?.attempt ?? 1,
+            bytes: size,
+          });
+          this.bufferedIds.add(item.videoId);
+          this.bufferedEntries.set(item.id, item.videoId);
+          this.refreshBufferedCount();
+          this.download = null;
+          this.event();
+        } catch (error) {
+          if (signal.aborted) throw error;
+          const message =
+            error instanceof Error ? error.message : "Media download failed";
+          // Keep the logical queue entry intact. A per-video failure receives a
+          // cooldown below so another eligible entry can fill the slot without
+          // losing this entry or spinning on it immediately.
           this.event(
-            "Buffer refill paused because the downloader needs attention; IdleCast will retry without cycling through every video",
+            "Media failed while buffering: " +
+              item.title +
+              " \u2014 " +
+              message,
             "warn",
           );
-          break;
+          this.recordRecoveryCircuitFailure(message);
+          if (pausesDownloadQueue(message)) {
+            this.event(
+              "Buffer refill paused because the downloader needs attention; IdleCast will retry without cycling through every video",
+              "warn",
+            );
+            break;
+          }
+          // A per-video failure must not permanently occupy one of the three
+          // startup/rolling slots. Cool this logical entry down so the next
+          // eligible queue entry can fill the slot; a later resync or cooldown
+          // can make it eligible again without losing its queue identity.
+          this.store.fail(item.id, message);
         }
       }
+    } finally {
+      for (const videoId of reservations) this.bufferReservations.delete(videoId);
+      source.retain?.(this.retainedVideoIds());
     }
-    source.retain?.([...this.bufferedIds]);
   }
 
   private finishRefill(source: MediaSourceProvider, signal: AbortSignal) {
@@ -1454,6 +1605,7 @@ export class Engine extends EventEmitter {
   private retainedVideoIds(extra: string[] = []) {
     return [...new Set([
       ...this.bufferedIds,
+      ...this.bufferReservations,
       ...[...this.preparedMedia.values()].map((prepared) => prepared.videoId).filter((id): id is string => !!id),
       ...extra,
     ])];
@@ -1472,6 +1624,11 @@ export class Engine extends EventEmitter {
       try {
         await stat(existing.file);
         existing.owner = owner;
+        if (owner !== "marathon") {
+          this.bufferedIds.add(item.videoId);
+          this.bufferedEntries.set(item.id, item.videoId);
+          this.refreshBufferedCount();
+        }
         return existing;
       } catch {
         this.preparedMedia.delete(key);
@@ -1484,7 +1641,14 @@ export class Engine extends EventEmitter {
         await stat(shared.file);
         const prepared = { ...shared, owner, logicalId: key, videoId: item.videoId };
         const wanted = stillWanted();
-        if (wanted) this.preparedMedia.set(key, prepared);
+        if (wanted) {
+          this.preparedMedia.set(key, prepared);
+          if (owner !== "marathon") {
+            this.bufferedIds.add(item.videoId);
+            this.bufferedEntries.set(item.id, item.videoId);
+            this.refreshBufferedCount();
+          }
+        }
         return wanted ? prepared : null;
       } catch {
         this.event(`Prepared media unavailable; re-preparing ${item.title}`, "warn", { entryId: key, videoId: item.videoId });
@@ -1502,7 +1666,8 @@ export class Engine extends EventEmitter {
     this.cachedSizes.set(item.videoId, size);
     if (owner !== "marathon") {
       this.bufferedIds.add(item.videoId);
-      this.bufferedCount = this.bufferedIds.size;
+      this.bufferedEntries.set(item.id, item.videoId);
+      this.refreshBufferedCount();
     }
     this.downloadStates.set(item.videoId, {
       videoId: item.videoId,
@@ -1571,6 +1736,21 @@ export class Engine extends EventEmitter {
     const handoffItems = plan
       ? plan.entryIds.map((id) => items.find((item) => item.id === id)).filter((item): item is StoredItem => !!item)
       : [];
+    if (plan) {
+      const handoffEntryIds = new Set(handoffItems.map((item) => item.id));
+      for (const entryId of [...this.bufferedEntries.keys()])
+        if (!handoffEntryIds.has(entryId)) this.bufferedEntries.delete(entryId);
+      const handoffVideoIds = new Set(handoffItems.map((item) => item.videoId));
+      for (const videoId of [...this.bufferedIds])
+        if (!handoffVideoIds.has(videoId) && videoId !== this.current?.videoId) {
+          this.bufferedIds.delete(videoId);
+          this.preparedMedia.delete(videoId);
+          this.downloadStates.delete(videoId);
+          this.cachedSizes.delete(videoId);
+          await source.remove?.(videoId).catch(() => {});
+        }
+      this.refreshBufferedCount();
+    }
     source.retain?.(this.retainedVideoIds([...marathonVideoIds, ...handoffItems.map((item) => item.videoId)]));
     for (const item of handoffItems) {
       signal.throwIfAborted();
@@ -1579,6 +1759,9 @@ export class Engine extends EventEmitter {
         prepared.owner = "normal-handoff";
         prepared.logicalId = item.id;
         prepared.videoId = item.videoId;
+        this.bufferedIds.add(item.videoId);
+        this.bufferedEntries.set(item.id, item.videoId);
+        this.refreshBufferedCount();
         continue;
       }
       try {
@@ -1896,7 +2079,8 @@ export class Engine extends EventEmitter {
           this.cachedSizes.set(item.videoId, size);
           if (handoff) {
             this.bufferedIds.add(item.videoId);
-            this.bufferedCount = this.bufferedIds.size;
+            this.bufferedEntries.set(item.id, item.videoId);
+            this.refreshBufferedCount();
           }
         }
         const preparationMs = Date.now() - transitionStartedAt;
@@ -1993,6 +2177,24 @@ export class Engine extends EventEmitter {
         this.event(`Transition ${transition} activated ${item.videoId} (FFmpeg PID ${child.pid ?? "unknown"})`);
         this.currentMedia = { file, duration };
         this.state = "playing";
+        if (!marathon && !isFallback) {
+          if (!this.preparedMedia.has(item.videoId)) {
+            const size = (await stat(file)).size;
+            this.preparedMedia.set(item.videoId, {
+              file,
+              info,
+              size,
+              owner: handoff ? "normal-handoff" : "normal",
+              logicalId: item.id,
+              videoId: item.videoId,
+            });
+            this.cachedSizes.set(item.videoId, size);
+          }
+          this.bufferedIds.add(item.videoId);
+          this.bufferedEntries.set(item.id, item.videoId);
+          this.refreshBufferedCount();
+          source.retain?.(this.retainedVideoIds([item.videoId]));
+        }
         if (!isFallback && s.shuffle && shortStartsRemaining > 0) {
           const remaining = Math.max(0, shortStartsRemaining - 1);
           this.store.set("shuffleShortStartsRemaining", remaining);
@@ -2273,10 +2475,9 @@ export class Engine extends EventEmitter {
           consumed = false;
           const preparedKey = marathon ? item.id : item.videoId;
           this.preparedMedia.delete(preparedKey);
-          this.bufferedIds.delete(item.videoId);
+          this.forgetBufferedVideo(item.videoId);
           this.downloadStates.delete(item.videoId);
           this.cachedSizes.delete(item.videoId);
-          this.bufferedCount = this.bufferedIds.size;
           if (item.sourceType !== "local") await source.remove?.(item.videoId).catch(() => {});
           if (marathon) {
             try { this.store.interruptMarathonEntry(marathon.id, marathon.entry.id, message); }
@@ -2311,12 +2512,13 @@ export class Engine extends EventEmitter {
       this.state = "selecting";
       if (consumed && !marathon) {
         if (handoff) this.advanceNormalHandoff(item.id);
-        this.bufferedIds.delete(item.videoId);
-        this.preparedMedia.delete(item.videoId);
-        this.downloadStates.delete(item.videoId);
-        this.cachedSizes.delete(item.videoId);
-        this.bufferedCount = this.bufferedIds.size;
-        await source.remove?.(item.videoId).catch(() => {});
+        const sharedMediaStillNeeded = this.releaseBufferedEntry(item.id, item.videoId);
+        if (!sharedMediaStillNeeded) {
+          this.preparedMedia.delete(item.videoId);
+          this.downloadStates.delete(item.videoId);
+          this.cachedSizes.delete(item.videoId);
+          await source.remove?.(item.videoId).catch(() => {});
+        }
         this.event();
         const fresh = this.store.all();
         const at = fresh.findIndex((i) => i.id === item!.id);
@@ -2350,18 +2552,23 @@ export class Engine extends EventEmitter {
     const refillAt = this.current
       ? this.normalRefillStart(items, at, this.store.settings())
       : at;
-    const wanted = this.bufferCandidates(items, refillAt)
-      .slice(0, this.bufferLimit)
-      .map((item) => item.videoId);
-    const wantedSet = new Set(wanted);
+    const currentEntryId = this.current && this.bufferedEntries.has(this.current.id)
+      ? this.current.id
+      : null;
+    const upcomingSlots = Math.max(0, this.bufferLimit - (currentEntryId ? 1 : 0));
+    const wanted = this.bufferCandidates(items, refillAt).slice(0, upcomingSlots);
+    const wantedEntryIds = new Set(wanted.map((item) => item.id));
+    if (currentEntryId) wantedEntryIds.add(currentEntryId);
     return {
       changesBuffer:
-        [...this.bufferedIds].some((id) => !wantedSet.has(id)) ||
-        wanted.some((id) => !this.bufferedIds.has(id)),
-      removed: [...this.bufferedIds].filter(
-        (id) => !wantedSet.has(id) && id !== this.current?.videoId,
+        [...this.bufferedEntries.keys()].some((id) => !wantedEntryIds.has(id)) ||
+        wanted.some((item) => !this.bufferedEntries.has(item.id)),
+      removed: [...this.bufferedEntries.keys()].filter(
+        (id) => !wantedEntryIds.has(id),
       ),
-      added: wanted.filter((id) => !this.bufferedIds.has(id)),
+      added: wanted
+        .filter((item) => !this.bufferedEntries.has(item.id))
+        .map((item) => item.id),
     };
   }
 
@@ -2385,16 +2592,28 @@ export class Engine extends EventEmitter {
       const refillAt = this.current
         ? this.normalRefillStart(items, at, this.store.settings())
         : at;
-      const wanted = this.bufferCandidates(items, refillAt).slice(0, this.bufferLimit);
-      const wantedIds = new Set(wanted.map((item) => item.videoId));
-      this.activeSource.retain?.([...wantedIds]);
+      const currentEntryId = this.current && this.bufferedEntries.has(this.current.id)
+        ? this.current.id
+        : null;
+      const upcomingSlots = Math.max(0, this.bufferLimit - (currentEntryId ? 1 : 0));
+      const wanted = this.bufferCandidates(items, refillAt).slice(0, upcomingSlots);
+      const wantedEntryIds = new Set(wanted.map((item) => item.id));
+      if (currentEntryId) wantedEntryIds.add(currentEntryId);
+      for (const entryId of [...this.bufferedEntries.keys()])
+        if (!wantedEntryIds.has(entryId)) this.bufferedEntries.delete(entryId);
+      const wantedIds = new Set(this.bufferedEntries.values());
+      for (const item of wanted) wantedIds.add(item.videoId);
+      if (this.current?.videoId) wantedIds.add(this.current.videoId);
+      this.activeSource.retain?.(this.retainedVideoIds([...wantedIds]));
       for (const id of [...this.bufferedIds])
         if (id !== this.current?.videoId && !wantedIds.has(id)) {
           await this.activeSource.remove?.(id).catch(() => {});
           this.bufferedIds.delete(id);
           this.preparedMedia.delete(id);
+          this.downloadStates.delete(id);
+          this.cachedSizes.delete(id);
         }
-      this.bufferedCount = this.bufferedIds.size;
+      this.refreshBufferedCount();
       this.event("Active download queue updated");
       this.scheduleRefill(
         this.activeSource,

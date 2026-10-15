@@ -10,7 +10,7 @@ IdleCast uses the **official YouTube Data API for metadata and ordering only**. 
 
 - Complete YouTube playlist pagination, duplicate entries, original ordering, scheduled/manual resync, and atomic snapshots.
 - SQLite migrations, durable playback intent and cursor, five-second progress checkpoints, restart recovery, per-item failure cooldowns, and continuous looping.
-- A five-video startup and rolling media cache, serialized downloads, visible download progress, cache-deletion logs, and a branded standby stream while downloads are slow or items are unavailable.
+- A three-video startup and rolling media cache, serialized downloads, visible download progress, cache-deletion logs, and a branded standby stream while downloads are slow or items are unavailable.
 - Selectable 720p or 1080p H.264/AAC output at 24, 30, or 60 fps, shared by independent RTMPS output workers.
 - Current video title and upload date in the bottom-left plus elapsed/total time in the bottom-right: **white text with a black outline and no background rectangle**. The title/date block is centered beside a proportional square avatar crop.
 - Combined playlist/channel queues, title exclusions, reshuffling, and manual queue ordering. Shuffled queues start with two videos of 15 minutes or less, keep ordinary videos over 70 minutes from playing consecutively, and place videos over 3 hours directly after a video of at least 2 hours for download lead time.
@@ -67,7 +67,7 @@ Open [http://localhost:3000](http://localhost:3000), sign in, and:
 4. In the destination's creator dashboard, prepare the live broadcast. IdleCast does not create/schedule YouTube broadcasts or change their visibility.
 5. Return to Overview and select **Start broadcast**. Confirm viewer playback in YouTube Studio/Twitch.
 
-The initial five-video buffer can take time. A standby slate starts immediately while media is prepared. IdleCast prepares upcoming media in advance and keeps the outgoing stream alive if an item is delayed or unavailable.
+The initial three-video buffer can take time. A standby slate starts immediately while media is prepared. IdleCast prepares upcoming media in advance and keeps the outgoing stream alive if an item is delayed or unavailable.
 
 ## Access on a VPS
 
@@ -93,7 +93,7 @@ Use the Credentials section to save YouTube API, YouTube stream, and Twitch stre
 
 The overlay uses the actual video title during playback; the editable title is a standby/preview fallback. Save output quality before previewing it. Source resolution/frame rate cannot be increased beyond the original detail or motion. The preview remains periodic snapshots, not a full-motion player.
 
-Downloads use resolved FFmpeg paths and the running Node executable for YouTube JavaScript challenges. The full video must download and merge before playback. Long downloads have a six-hour maximum; the cache monitor still enforces the overall budget. With `CACHE_MAX_MB=65536`, the per-video limit is 32 GiB. Safe diagnostic categories now distinguish merge/path, access, format, and cache problems without exposing raw third-party output.
+Downloads use resolved FFmpeg paths, the running Node executable, and yt-dlp's official EJS component fallback for YouTube JavaScript challenges. The full video must download and merge before playback. Long downloads have a twelve-hour maximum; the cache monitor still enforces the overall budget. With `CACHE_MAX_MB=65536`, the per-video limit is 32 GiB. Safe diagnostic categories now distinguish merge/path, access, format, and cache problems without exposing raw third-party output.
 
 Credentials come from encrypted in-app storage or the environment fallback and are never returned by the admin API or included in logs. The dashboard only reports whether a key is configured. Restart/recreate after changing environment values; in-app credential saves apply immediately. Sessions expire after 24 hours and are invalidated on service startup.
 

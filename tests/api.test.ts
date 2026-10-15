@@ -127,7 +127,10 @@ test("admin authentication, write-origin checks, secret exclusion, validation, a
     engine.state = "playing";
     engine.current = store.all()[0];
     (engine as any).bufferedIds = new Set(
-      store.all().slice(0, 5).map((item) => item.videoId),
+      store.all().slice(0, 3).map((item) => item.videoId),
+    );
+    (engine as any).bufferedEntries = new Map(
+      store.all().slice(0, 3).map((item) => [item.id, item.videoId]),
     );
     const needsConfirmation = await fetch(base + "/api/playlist/order", {
       method: "PUT",

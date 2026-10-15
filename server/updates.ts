@@ -3,6 +3,17 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.6.7",
+    date: "Oct 15, 2026",
+    title: "Three-video buffer and downloader recovery",
+    items: [
+      "Normal playback now waits for three validated logical queue entries and continuously maintains the current video plus the next two",
+      "Buffer reservations and logical entry ownership prevent cache cleanup, duplicate videos, and stale refills from corrupting playback order",
+      "YouTube account-verification failures now try public clients, pause queue-wide cycling, and recheck access after a bounded cooldown",
+      "Windows cancellation terminates complete yt-dlp and FFmpeg process trees, while unavailable videos and stalled fragments receive more accurate handling",
+    ],
+  },
+  {
     version: "1.6.6",
     date: "Oct 14, 2026",
     title: "Transition preload and standby continuity repair",

@@ -61,7 +61,7 @@ export type MediaSourceHooks = {
   onResolved?: (item: PlaylistItem) => void;
 };
 export function isRetryableDownloadFailure(message: string) {
-  return !/account verification|rate limit|media disk is full|required media executable|packaged ffmpeg runtime is missing|executable path|cache limit exceeded|exceeds the configured per-video cache limit|cache storage is unavailable|recovery attempt limit exhausted/i.test(
+  return !/account verification|rate limit|media disk is full|required media executable|packaged ffmpeg runtime is missing|executable path|cache limit exceeded|exceeds the configured per-video cache limit|cache storage is unavailable|recovery attempt limit exhausted|youtube video is (?:unavailable|private)|private video|deleted video|copyright.*(?:unavailable|restricted)|not available in your country/i.test(
     message,
   );
 }
@@ -284,7 +284,7 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
   private pending = new Map<string, Promise<string>>();
   private retained = new Set<string>();
   private queue: Promise<unknown> = Promise.resolve();
-  private cookiesRejected = false;
+  private cookiesRejectedUntil = 0;
   constructor(
     private c: Config,
     private run: typeof runCapture = runCapture,
@@ -397,7 +397,7 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
       throw new Error(`Media disk is full or lacks download/merge headroom: ${Math.round(freeBytes / 1048576)} MB free, ${Math.round(estimatedBytes / 1048576)} MB required`);
     let lastError: unknown;
     let finalAttempt = 0;
-    let usePublicClients = !this.c.YTDLP_COOKIES_FILE || this.cookiesRejected;
+    let usePublicClients = !this.c.YTDLP_COOKIES_FILE || Date.now() < this.cookiesRejectedUntil;
     let retryImmediately = false;
     let publicStrategyAttempt = usePublicClients ? 1 : 0;
     for (let attempt = 1; attempt <= 3; attempt++) {
@@ -439,20 +439,20 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
           message = "yt-dlp executable could not start";
         else if (/Media tool failed/i.test(message))
           message = "yt-dlp unexpectedly exited non-zero";
-        lastError = new Error(message);
-        if (
-          this.c.YTDLP_COOKIES_FILE &&
-          !usePublicClients &&
-          /account verification|sign in|cookies|login required/i.test(message)
-        ) {
-          // A stale authenticated session should not poison the whole queue.
-          // Subsequent attempts use public clients and retain ordinary bounded
-          // retries for temporary network failures.
-          this.cookiesRejected = true;
+        const accountRejected = /account verification|sign in|cookies|login required/i.test(message);
+        if (this.c.YTDLP_COOKIES_FILE && !usePublicClients && accountRejected) {
+          // Try public clients for this operation, but only cool down the
+          // configured cookie file temporarily. A refreshed cookie export can
+          // recover later without requiring an application restart.
+          this.cookiesRejectedUntil = Date.now() + 15 * 60_000;
+          lastError = new Error("YouTube cookies rejected by account verification");
           usePublicClients = true;
           retryImmediately = true;
           continue;
         }
+        if (accountRejected && usePublicClients)
+          message = "YouTube login required; public clients were rejected by account verification";
+        lastError = new Error(message);
         if (!isRetryableDownloadFailure(message)) break;
       }
     }
@@ -477,8 +477,9 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
     let lastProgress = Date.now();
     let lastBytes = 0;
     let lastPercent = -1;
+    let lastFragment = -1;
     this.hooks.onDownload?.(this.activity(item, "downloading", 0, attempt, { phase: "resolving" }));
-    const publicClient = strategyAttempt % 3 === 0 ? "ios,web_embedded" : strategyAttempt % 2 === 0 ? "tv,web_embedded" : "android_vr,web_embedded";
+    const publicClient = strategyAttempt % 3 === 0 ? "android_vr,web_embedded" : strategyAttempt % 2 === 0 ? "tv,web_embedded" : "default";
     const formatSelector = strategyAttempt % 4 === 0
       ? "b[height<=" + this.quality.height + "]/bv*[height<=" + this.quality.height + "]+ba"
       : "bv*[height<=" + this.quality.height + "]+ba/b[height<=" + this.quality.height + "]";
@@ -506,7 +507,8 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
        "--progress-template", "postprocess:idlecast-postprocess:%(progress)j",
        "--print", "after_move:idlecast-complete:%(filepath)j", "--no-cache-dir",
        "--concurrent-fragments", "4", "--buffer-size", "1M", "--no-resize-buffer",
-       "--js-runtimes", "node:" + process.execPath, "--max-filesize", String(perVideoLimit),
+       "--js-runtimes", "node:" + process.execPath,
+       "--remote-components", "ejs:github", "--max-filesize", String(perVideoLimit),
        "--socket-timeout", "20", "--retries", "2", "--fragment-retries", "2",
        "--ffmpeg-location", this.c.FFMPEG_PATH, "--merge-output-format", "mp4",
        "-f", formatSelector,
@@ -558,9 +560,10 @@ export class ExperimentalYouTubeSource implements MediaSourceProvider {
           const percent = rawPercent ?? (total && downloaded >= 0 ? downloaded / total * 100 : null);
           const fragmentIndex = numeric(record.fragment_index);
           const fragmentCount = numeric(record.fragment_count);
-          if (downloaded > lastBytes || (percent !== null && percent > lastPercent) || fragmentIndex !== null)
+          if (downloaded > lastBytes || (percent !== null && percent > lastPercent) || (fragmentIndex !== null && fragmentIndex > lastFragment))
             lastProgress = Date.now();
           lastBytes = Math.max(lastBytes, downloaded);
+          if (fragmentIndex !== null) lastFragment = Math.max(lastFragment, fragmentIndex);
           if (percent !== null) lastPercent = Math.max(lastPercent, percent);
           const displayPercent = lastPercent < 0 ? null : Math.max(0, Math.min(100, lastPercent));
           this.hooks.onDownload?.(this.activity(item, "downloading", displayPercent, attempt, {

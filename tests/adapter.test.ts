@@ -109,7 +109,7 @@ test("stale authenticated cookies fall back to public YouTube clients", async ()
     assert.equal(calls[1].includes("--cookies"), false);
     assert.equal(
       calls[1][calls[1].indexOf("--extractor-args") + 1],
-      "youtube:player_client=android_vr,web_embedded",
+      "youtube:player_client=default",
     );
     await source.resolve(
       {
@@ -128,7 +128,7 @@ test("stale authenticated cookies fall back to public YouTube clients", async ()
     assert.equal(calls[2].includes("--cookies"), false);
     assert.equal(
       calls[2][calls[2].indexOf("--extractor-args") + 1],
-      "youtube:player_client=android_vr,web_embedded",
+      "youtube:player_client=default",
     );
   } finally {
     await source.close();
@@ -136,7 +136,7 @@ test("stale authenticated cookies fall back to public YouTube clients", async ()
   }
 });
 
-test("experimental adapter reports progress, retains five videos, deletes completed media and serializes downloads", async () => {
+test("experimental adapter reports progress, retains requested videos, deletes completed media and serializes downloads", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "idlecast-adapter-"));
   const c = readConfig({
     ADMIN_PASSWORD: "test-password-long-enough",
@@ -306,7 +306,7 @@ test("download accounting excludes retained files and reserves half the cache pe
     );
     assert.equal(
       seenArgs[seenArgs.indexOf("--extractor-args") + 1],
-      "youtube:player_client=android_vr,web_embedded",
+      "youtube:player_client=default",
     );
     assert.ok(bytes.includes(10), "active download bytes should be reported");
     assert.ok(

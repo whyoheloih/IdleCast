@@ -6,6 +6,7 @@ import {
   readFile,
   mkdir,
   stat,
+  writeFile,
 } from "node:fs/promises";
 import path from "node:path";
 import os from "node:os";
@@ -173,11 +174,68 @@ test("FFmpeg overlay has no background box and has outlined text with an opaque 
     await rm(root, { recursive: true, force: true });
   }
 });
+test("buffer reservations prevent transition retain updates from deleting later queued media", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "idlecast-buffer-retain-"));
+  const file = path.join(root, "prepared.mp4");
+  const db = new Store(path.join(root, "db.sqlite"));
+  const retained = new Set<string>();
+  try {
+    await writeFile(file, "fixture");
+    const c = readConfig({
+      ADMIN_PASSWORD: "test-password-long-enough",
+      DATA_DIR: root,
+      MEDIA_DIR: root,
+      FONT_FILE: font,
+    });
+    let engine: Engine;
+    const source = {
+      retain(ids: string[]) {
+        retained.clear();
+        for (const id of ids) retained.add(id);
+      },
+      async resolve(item: PlaylistItem) {
+        if (item.id === "first")
+          source.retain((engine as any).retainedVideoIds([item.videoId]));
+        assert.ok(
+          retained.has(item.videoId),
+          `${item.id} must remain protected while the rolling refill is active`,
+        );
+        return file;
+      },
+    };
+    engine = new Engine(db, c, { source });
+    (engine as any).probeMedia = async () => ({
+      streams: [{ codec_type: "video" }],
+      format: { duration: 60 },
+    });
+    const items = ["first", "second"].map((id, position) => ({
+      id,
+      videoId: id === "first" ? "first000001" : "second00001",
+      position,
+      title: id,
+      channel: "Test",
+      thumbnail: "",
+      available: true,
+      duration: 60,
+      retryAt: 0,
+    }));
+    await (engine as any).fillBuffer(source, items, signal(), 2, 0);
+    assert.equal((engine as any).preparedMedia.has("first000001"), true);
+    assert.equal((engine as any).preparedMedia.has("second00001"), true);
+    assert.equal((engine as any).bufferReservations.size, 0);
+    await engine.close();
+  } finally {
+    db.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 test("failed prepared media is evicted instead of poisoning the buffer", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "idlecast-failed-transition-"));
   const file = path.join(root, "source.mp4");
   const db = new Store(path.join(root, "db.sqlite"));
   const removed: string[] = [];
+  let releaseRemoval = () => {};
+  const removalBlocked = new Promise<void>((resolve) => { releaseRemoval = resolve; });
   try {
     await runCapture(
       "ffmpeg",
@@ -199,7 +257,7 @@ test("failed prepared media is evicted instead of poisoning the buffer", async (
     const engine = new Engine(db, c, {
       source: {
         resolve: async () => file,
-        remove: async (id) => { removed.push(id); },
+        remove: async (id) => { removed.push(id); await removalBlocked; },
       },
       outputs: { youtube: { name: "youtube", args: () => [] } },
     });
@@ -212,6 +270,7 @@ test("failed prepared media is evicted instead of poisoning the buffer", async (
       assert.equal((engine as any).bufferedIds.has("abcdefghijk"), false);
       assert.equal((engine as any).preparedMedia.has("abcdefghijk"), false);
     } finally {
+      releaseRemoval();
       await engine.stop(true);
       await engine.close();
     }
@@ -353,9 +412,15 @@ test("real FFmpeg loop skips unavailable files, survives one failed output, and 
       false,
       "an unavailable local entry must not become the intended playback owner",
     );
-    assert.ok(
-      logs.filter((l) => l.message.startsWith("Finished:")).length >= 3,
-      JSON.stringify(logs),
+    const finished = logs
+      .filter((l) => l.message.startsWith("Finished:"))
+      .sort((a, b) => a.id - b.id)
+      .map((l) => l.message.slice("Finished: ".length));
+    assert.ok(finished.length >= 3, JSON.stringify(logs));
+    assert.deepEqual(
+      finished.slice(0, 3),
+      ["first", "second", "third"],
+      "normal queue entries must finish once each in authoritative order",
     );
     assert.ok(
       engine.outputs.twitch.retries > 0,

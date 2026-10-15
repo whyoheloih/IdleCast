@@ -16,6 +16,7 @@ import {
   needsLongDownloadLead,
   canLeadLongDownload,
   canFollowInShuffledQueue,
+  STARTUP_DOWNLOAD_COUNT,
 } from "../server/queue.js";
 import { overlayLayout, formatUploadDate } from "../server/overlay.js";
 
@@ -97,8 +98,8 @@ test("shuffle starts with two short videos and gives 3-hour videos download lead
   assert.ok(canStartShuffledQueue(queue[0]));
   assert.ok(canStartShuffledQueue(queue[1]));
   assert.ok(
-    queue.slice(0, 5).every(canStartBufferedQueue),
-    "the first five shuffled downloads must be 30 minutes or shorter",
+    queue.slice(0, STARTUP_DOWNLOAD_COUNT).every(canStartBufferedQueue),
+    "the first three shuffled downloads must be 30 minutes or shorter",
   );
   for (let index = 1; index < queue.length; index++) {
     if (needsLongDownloadLead(queue[index]))
@@ -119,7 +120,7 @@ test("shuffle starts with two short videos and gives 3-hour videos download lead
     (item) => (item.duration ?? 0) > 30 * 60,
   );
   badBufferedOpening.splice(0, 0, badBufferedOpening.splice(overThirty, 1)[0]);
-  assert.match(shuffleOrderError(badBufferedOpening)!, /first five playable/);
+  assert.match(shuffleOrderError(badBufferedOpening)!, /first three playable/);
 
   const badOpening = [...queue];
   const overFifteen = badOpening.findIndex(

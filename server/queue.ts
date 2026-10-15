@@ -4,7 +4,8 @@ import type { Settings } from "./config.js";
 
 export const LONG_VIDEO_SECONDS = 70 * 60;
 export const SHUFFLE_START_MAX_SECONDS = 15 * 60;
-export const STARTUP_DOWNLOAD_COUNT = 5;
+export const NORMAL_BUFFER_COUNT = 3;
+export const STARTUP_DOWNLOAD_COUNT = NORMAL_BUFFER_COUNT;
 export const STARTUP_DOWNLOAD_MAX_SECONDS = 30 * 60;
 export const DOWNLOAD_LEAD_SECONDS = 2 * 60 * 60;
 export const VERY_LONG_VIDEO_SECONDS = 3 * 60 * 60;
@@ -162,7 +163,7 @@ export function shuffleOrderError(items: PlaylistItem[]) {
       .slice(0, bufferedOpeningCount)
       .some((item) => !canStartBufferedQueue(item))
   )
-    return "The first five playable shuffled videos must be 30 minutes or shorter";
+    return "The first three playable shuffled videos must be 30 minutes or shorter";
   const shortOpeningCount = Math.min(2, playable.length);
   if (
     playable

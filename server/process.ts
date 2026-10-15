@@ -18,6 +18,10 @@ export function mediaFailure(child: ChildProcess): string {
     return "YouTube fragment retries exhausted";
   if (/merg|mux|postprocess/i.test(text))
     return "Downloaded media merge failed";
+  if (/private video|this video is private/i.test(text))
+    return "YouTube video is private or requires access";
+  if (/video unavailable|video has been removed|deleted video|copyright.*(?:unavailable|blocked)/i.test(text))
+    return "YouTube video is unavailable, deleted, or restricted";
   if (/sign in|confirm.*bot|cookies|login required/i.test(text))
     return "YouTube requires account verification for this request";
   if (/403|forbidden/i.test(text))
@@ -63,10 +67,28 @@ export function launch(
 }
 export function terminate(child: ChildProcess) {
   if (child.exitCode !== null || child.signalCode !== null) return;
+  if (process.platform === "win32" && child.pid) {
+    const fallback = () => {
+      if (child.exitCode === null && child.signalCode === null)
+        try { child.kill(); } catch {}
+    };
+    try {
+      const killer = spawn(
+        "taskkill",
+        ["/pid", String(child.pid), "/T", "/F"],
+        { shell: false, windowsHide: true, stdio: "ignore" },
+      );
+      killer.once("error", fallback);
+      killer.once("close", (code) => { if (code !== 0) fallback(); });
+      killer.unref();
+    } catch {
+      fallback();
+    }
+    return;
+  }
   const kill = (signal: NodeJS.Signals) => {
     try {
-      if (process.platform !== "win32" && child.pid)
-        process.kill(-child.pid, signal);
+      if (child.pid) process.kill(-child.pid, signal);
       else child.kill(signal);
     } catch {}
   };

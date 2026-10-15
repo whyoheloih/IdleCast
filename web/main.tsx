@@ -408,7 +408,7 @@ function App() {
       setNotice(
         state?.state === "stopped"
           ? "Queue order saved."
-          : "Queue order saved. IdleCast is updating the five-video download buffer.",
+          : "Queue order saved. IdleCast is updating the three-video download buffer.",
       );
     });
   }
@@ -1251,7 +1251,7 @@ function App() {
               <div className="empty">
                 <Download size={28} />
                 <h3>No videos downloaded yet</h3>
-                <p>Start or prepare playback to fill the five-video buffer.</p>
+                <p>Start or prepare playback to fill the three-video buffer.</p>
               </div>
             )}
               </div>
