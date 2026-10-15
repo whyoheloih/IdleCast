@@ -3,6 +3,15 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.6.9",
+    date: "Oct 15, 2026",
+    title: "Shutdown callback safety",
+    items: [
+      "Late FFmpeg and downloader callbacks are ignored after the playback engine closes so they cannot write to a closed database",
+      "Includes the validated three-entry playback buffer and account-verification recovery improvements from 1.6.7 and 1.6.8",
+    ],
+  },
+  {
     version: "1.6.8",
     date: "Oct 15, 2026",
     title: "Strict startup verification",

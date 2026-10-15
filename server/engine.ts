@@ -362,6 +362,7 @@ export class Engine extends EventEmitter {
     this.store.set("downloadJobs", retained);
   }
   event(message?: string, level = "info", runtime: Record<string, unknown> = {}) {
+    if (this.closed) return;
     if (message) {
       this.store.log(level, message);
       const code = diagnosticForMessage(message);

@@ -1,18 +1,18 @@
-name: Build and publish IdleCast 1.6.8
+name: Build and publish IdleCast 1.6.9
 
 on:
   push:
     branches:
       - main
     paths:
-      - .github/workflows/release-1.6.8.yml
+      - .github/workflows/release-1.6.9.yml
   workflow_dispatch:
 
 permissions:
   contents: write
 
 concurrency:
-  group: idlecast-release-1.6.8
+  group: idlecast-release-1.6.9
   cancel-in-progress: false
 
 jobs:
@@ -64,9 +64,9 @@ jobs:
         shell: pwsh
         run: |
           $files = @(
-            "release/IdleCast-Setup-1.6.8-x64.exe",
-            "release/IdleCast-Setup-1.6.8-x64.exe.blockmap",
-            "release/IdleCast-Portable-1.6.8-x64.exe",
+            "release/IdleCast-Setup-1.6.9-x64.exe",
+            "release/IdleCast-Setup-1.6.9-x64.exe.blockmap",
+            "release/IdleCast-Portable-1.6.9-x64.exe",
             "release/latest.yml"
           )
           foreach ($file in $files) {
@@ -91,19 +91,19 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           $files = @(
-            "release/IdleCast-Setup-1.6.8-x64.exe",
-            "release/IdleCast-Setup-1.6.8-x64.exe.blockmap",
-            "release/IdleCast-Portable-1.6.8-x64.exe",
+            "release/IdleCast-Setup-1.6.9-x64.exe",
+            "release/IdleCast-Setup-1.6.9-x64.exe.blockmap",
+            "release/IdleCast-Portable-1.6.9-x64.exe",
             "release/latest.yml"
           )
           $notes = @"
-          IdleCast 1.6.8 maintains a validated three-entry playback buffer and includes the corrected strict-startup verification.
+          IdleCast 1.6.9 maintains a validated three-entry playback buffer and prevents late process callbacks from touching closed application state.
 
           Logical duplicate entries remain distinct, cache cleanup protects current and upcoming media, and account-verification failures fall back safely without cycling the entire queue.
           "@
-          if (gh release view v1.6.8 --repo ${{ github.repository }} 2>$null) {
-            gh release upload v1.6.8 @files --clobber --repo ${{ github.repository }}
-            gh release edit v1.6.8 --title "IdleCast 1.6.8" --notes "$notes" --latest --repo ${{ github.repository }}
+          if (gh release view v1.6.9 --repo ${{ github.repository }} 2>$null) {
+            gh release upload v1.6.9 @files --clobber --repo ${{ github.repository }}
+            gh release edit v1.6.9 --title "IdleCast 1.6.9" --notes "$notes" --latest --repo ${{ github.repository }}
           } else {
-            gh release create v1.6.8 @files --target ${{ github.sha }} --title "IdleCast 1.6.8" --notes "$notes" --latest --repo ${{ github.repository }}
+            gh release create v1.6.9 @files --target ${{ github.sha }} --title "IdleCast 1.6.9" --notes "$notes" --latest --repo ${{ github.repository }}
           }
