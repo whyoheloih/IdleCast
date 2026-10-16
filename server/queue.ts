@@ -348,15 +348,20 @@ function seriesBlocks(items: PlaylistItem[], limit: number) {
       blocks.push([trigger]);
       continue;
     }
-    const continuation = (bySeries.get(trigger.seriesKey) ?? [trigger])
+    const remaining = (bySeries.get(trigger.seriesKey) ?? [trigger])
       .filter((item) => !emitted.has(item.id))
       .sort(
         (a, b) =>
           (a.seriesIndex ?? Number.MAX_SAFE_INTEGER) -
             (b.seriesIndex ?? Number.MAX_SAFE_INTEGER) ||
           a.position - b.position,
-      )
-      .slice(0, limit);
+      );
+    // Align blocks from the end so the finale remains in a full selected-size
+    // consecutive window instead of being left in a short block.
+    const remainder = remaining.length % limit;
+    const blockSize =
+      remaining.length > limit && remainder > 0 ? remainder : limit;
+    const continuation = remaining.slice(0, blockSize);
     const block = continuation.length ? continuation : [trigger];
     for (const item of block) emitted.add(item.id);
     blocks.push(block);

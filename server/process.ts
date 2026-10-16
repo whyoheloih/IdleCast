@@ -16,7 +16,7 @@ export function mediaFailure(child: ChildProcess): string {
     return "YouTube audio download failed";
   if (/fragment.*(?:retry|fail)|retry.*fragment/i.test(text))
     return "YouTube fragment retries exhausted";
-  if (/merg|mux|postprocess/i.test(text))
+  if (/\bmerg(?:e|ed|es|er|ing)\b|\bmux(?:ed|es|er|ing)?\b|\bpost-?process(?:ed|es|or|ing)?\b/i.test(text))
     return "Downloaded media merge failed";
   if (/private video|this video is private/i.test(text))
     return "YouTube video is private or requires access";

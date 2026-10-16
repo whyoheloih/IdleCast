@@ -16,13 +16,17 @@ import {
   Engine,
   countsTowardFailureHistory,
   pausesDownloadQueue,
+  preserveSyncedShuffleOrder,
+  reconcileQueueCursor,
   recoveryCircuitKind,
 } from "../server/engine.js";
 import { runCapture, delay } from "../server/process.js";
 import {
+  fallbackIndicatorColor,
   overlay,
   formatTimeline,
 } from "../server/overlay.js";
+import { diagnosticForMessage } from "../server/diagnostics.js";
 import {
   LocalMediaSource,
   type PlaylistItem,
@@ -55,6 +59,215 @@ test("recovery circuit classification targets shared failures but not individual
   assert.equal(recoveryCircuitKind("this one video is corrupt"), null);
 });
 
+test("playlist synchronization preserves established shuffle order and inserts new series episodes together", () => {
+  const item = (
+    id: string,
+    position: number,
+    seriesKey = "",
+    seriesIndex: number | null = null,
+  ) => ({
+    id,
+    videoId: id.padEnd(11, "0").slice(0, 11),
+    position,
+    title: id,
+    channel: "Test",
+    thumbnail: "",
+    available: true,
+    duration: 300,
+    retryAt: 0,
+    seriesKey,
+    seriesIndex,
+  });
+  const previous = [
+    item("episode-one", 0, "series", 1),
+    item("episode-two", 1, "series", 2),
+    item("ordinary", 2),
+  ];
+  const refreshed = [
+    item("new-ordinary", 0),
+    item("episode-three", 1, "series", 3),
+    item("ordinary", 2),
+    item("episode-two", 3, "series", 2),
+    item("episode-one", 4, "series", 1),
+  ];
+  const result = preserveSyncedShuffleOrder(
+    previous as any,
+    refreshed as any,
+  );
+  assert.deepEqual(
+    result.map((entry) => entry.id),
+    [
+      "episode-one",
+      "episode-two",
+      "episode-three",
+      "ordinary",
+      "new-ordinary",
+    ],
+  );
+  assert.deepEqual(
+    result.map((entry) => entry.position),
+    [0, 1, 2, 3, 4],
+  );
+});
+test("playlist synchronization preserves or safely reconciles the normal cursor", () => {
+  const item = (id: string, position: number) => ({
+    id,
+    videoId: id.padEnd(11, "0").slice(0, 11),
+    position,
+    title: id,
+    channel: "Test",
+    thumbnail: "",
+    available: true,
+    duration: 300,
+    retryAt: 0,
+  });
+  const previous = [item("one", 0), item("two", 1), item("three", 2)];
+  const reordered = [item("three", 0), item("two", 1), item("one", 2)];
+  assert.deepEqual(
+    reconcileQueueCursor(previous as any, reordered as any, {
+      id: "two",
+      offset: 42,
+    }),
+    { id: "two", offset: 42 },
+  );
+  assert.deepEqual(
+    reconcileQueueCursor(previous as any, [reordered[0], reordered[2]] as any, {
+      id: "two",
+      offset: 42,
+    }),
+    { id: "three", offset: 0 },
+  );
+});
+
+test("Marathon normal handoff begins at an entry allowed by active series state", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "idlecast-handoff-rules-"));
+  const db = new Store(path.join(root, "db.sqlite"));
+  const make = (
+    id: string,
+    position: number,
+    seriesKey = "",
+    seriesIndex: number | null = null,
+  ) => ({
+    id,
+    videoId: id.padEnd(11, "0").slice(0, 11),
+    position,
+    title: id,
+    channel: "Test",
+    thumbnail: "",
+    available: true,
+    duration: 300,
+    retryAt: 0,
+    seriesKey,
+    seriesIndex,
+  });
+  const items = [
+    make("blocked-series", 0, "another-series", 4),
+    make("ordinary-one", 1),
+    make("ordinary-two", 2),
+    make("ordinary-three", 3),
+    make("ordinary-four", 4),
+    make("ordinary-five", 5),
+  ];
+  db.replace(items);
+  db.set("settings", {
+    ...defaults,
+    shuffle: true,
+    filters: {
+      ...defaults.filters,
+      seriesMode: "strict",
+      seriesLimit: 3,
+    },
+  });
+  db.set("cursor", { id: "blocked-series", offset: 0 });
+  db.set("activeSeriesBlockKey", "current-series");
+  db.set("ordinaryVideosSinceSeries", 0);
+  const engine = new Engine(
+    db,
+    readConfig({
+      ADMIN_PASSWORD: "test-password-long-enough",
+      DATA_DIR: root,
+      MEDIA_DIR: root,
+      FONT_FILE: font,
+    }),
+  );
+  try {
+    const plan = (engine as any).ensureNormalHandoffPlan(
+      "marathon-rules",
+      db.all(),
+    );
+    assert.equal(plan.entryIds[0], "ordinary-one");
+    assert.equal(plan.entryIds.includes("blocked-series"), false);
+  } finally {
+    await engine.close();
+    db.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+test("startup revalidates a persisted recovered incident before it owns playback", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "idlecast-recovery-startup-"));
+  const db = new Store(path.join(root, "db.sqlite"));
+  const item = {
+    id: "recovered-entry",
+    videoId: "recover00001",
+    position: 0,
+    title: "Recovered intended video",
+    channel: "Test",
+    thumbnail: "",
+    available: true,
+    duration: 60,
+    failures: 0,
+    retryAt: 0,
+    error: null,
+    seriesKey: "",
+    seriesIndex: null,
+    liveStatus: "none",
+    publishedAt: "2026-01-01T00:00:00Z",
+    sourceType: "youtube",
+  };
+  db.set("activeRecoveryIncident", {
+    id: "incident-1",
+    intendedEntryId: item.id,
+    intendedVideoId: item.videoId,
+    intendedTitle: item.title,
+    intendedItem: item,
+    ownership: "normal",
+    marathonId: null,
+    marathonEntryId: null,
+    status: "recovered",
+    sourceType: "youtube",
+    originalFailure: "download failed",
+    attempts: 3,
+    lastError: "",
+    currentFallbackId: null,
+    consecutiveFallbackCount: 0,
+    startedAt: Date.now() - 60_000,
+    lastAttemptAt: Date.now() - 30_000,
+    completedAt: Date.now() - 10_000,
+    preparedKey: item.videoId,
+  });
+  const engine = new Engine(
+    db,
+    readConfig({
+      ADMIN_PASSWORD: "test-password-long-enough",
+      DATA_DIR: root,
+      MEDIA_DIR: root,
+      FONT_FILE: font,
+    }),
+  );
+  try {
+    assert.equal((engine as any).restoreRecoveryForStartup(), true);
+    const restored = db.get<any>("activeRecoveryIncident", null);
+    assert.equal(restored.status, "recovering");
+    assert.equal(restored.completedAt, null);
+    assert.equal(restored.attempts, 3);
+    assert.equal(restored.intendedEntryId, item.id);
+    assert.match(restored.lastError, /revalidated after application restart/);
+  } finally {
+    await engine.close();
+    db.close();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 test("FFmpeg overlay has no background box and has outlined text with an opaque square avatar", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "idlecast-overlay-"));
   try {
@@ -174,6 +387,72 @@ test("FFmpeg overlay has no background box and has outlined text with an opaque 
     await rm(root, { recursive: true, force: true });
   }
 });
+test("Emergency Fallback hides bottom-left metadata and shows its streak indicator", async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), "idlecast-fallback-overlay-"));
+  try {
+    const c = readConfig({
+      ADMIN_PASSWORD: "test-password-long-enough",
+      DATA_DIR: root,
+      MEDIA_DIR: root,
+      FONT_FILE: font,
+    });
+    const settings = {
+      ...defaults,
+      overlay: {
+        ...defaults.overlay,
+        avatar: "missing-avatar.png",
+        title: "Fallback filename must stay hidden.mkv",
+      },
+    };
+    const result = await overlay(
+      c,
+      settings,
+      undefined,
+      "2026-10-15T00:00:00Z",
+      { offset: 10, total: 60 },
+      { name: "Test Marathon", completed: 2, total: 8 },
+      2,
+    );
+
+    assert.deepEqual(result.inputs, []);
+    assert.match(result.filter, /drawbox=.*color=0xE5B93F/);
+    assert.doesNotMatch(result.filter, /title\.txt|date\.txt|marathon\.txt/);
+    assert.match(result.filter, /marathon-progress\.txt/);
+    assert.match(result.filter, /Next video in/);
+    assert.equal(
+      await readFile(path.join(root, "overlay", "title.txt"), "utf8"),
+      "",
+    );
+    assert.equal(
+      await readFile(path.join(root, "overlay", "date.txt"), "utf8"),
+      "",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Emergency Fallback indicator colors reflect consecutive playback", () => {
+  assert.equal(fallbackIndicatorColor(1), "0x43A047");
+  assert.equal(fallbackIndicatorColor(2), "0xE5B93F");
+  assert.equal(fallbackIndicatorColor(3), "0xF28C28");
+  assert.equal(fallbackIndicatorColor(4), "0xE53935");
+  assert.equal(fallbackIndicatorColor(5), "0x8B1E1E");
+  assert.equal(fallbackIndicatorColor(6), "0x7E57C2");
+  assert.equal(fallbackIndicatorColor(12), "0x7E57C2");
+});
+
+test("Emergency Fallback status text is not misclassified as a media merge failure", () => {
+  assert.notEqual(
+    diagnosticForMessage("Emergency fallback completed; recovery was checked and remains paused"),
+    "IC-DL-007",
+  );
+  assert.equal(
+    diagnosticForMessage("Downloaded media merge failed"),
+    "IC-DL-007",
+  );
+});
+
 test("buffer reservations prevent transition retain updates from deleting later queued media", async () => {
   const root = await mkdtemp(path.join(os.tmpdir(), "idlecast-buffer-retain-"));
   const file = path.join(root, "prepared.mp4");

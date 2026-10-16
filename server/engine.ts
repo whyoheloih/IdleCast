@@ -55,6 +55,57 @@ export function pausesDownloadQueue(message: string) {
   );
 }
 
+export function preserveSyncedShuffleOrder(
+  previous: StoredItem[],
+  next: StoredItem[],
+) {
+  if (!previous.length) return next;
+  const byId = new Map(next.map((item) => [item.id, item] as const));
+  const ordered = previous
+    .map((item) => byId.get(item.id))
+    .filter((item): item is StoredItem => !!item);
+  const retained = new Set(ordered.map((item) => item.id));
+  for (const item of next) {
+    if (retained.has(item.id)) continue;
+    if (item.seriesKey) {
+      const sameSeries = ordered
+        .map((candidate, index) => ({ candidate, index }))
+        .filter(({ candidate }) => candidate.seriesKey === item.seriesKey);
+      const before = sameSeries.find(
+        ({ candidate }) =>
+          (candidate.seriesIndex ?? Number.MAX_SAFE_INTEGER) >
+          (item.seriesIndex ?? Number.MAX_SAFE_INTEGER),
+      );
+      const insertAt = before?.index ??
+        (sameSeries.length ? sameSeries.at(-1)!.index + 1 : ordered.length);
+      ordered.splice(insertAt, 0, item);
+    } else {
+      ordered.push(item);
+    }
+    retained.add(item.id);
+  }
+  return ordered.map((item, position) => ({ ...item, position }));
+}
+
+export function reconcileQueueCursor(
+  previous: StoredItem[],
+  next: StoredItem[],
+  cursor: { id: string; offset: number } | null,
+) {
+  if (!cursor || !next.length) return cursor && !next.length ? null : cursor;
+  if (next.some((item) => item.id === cursor.id)) return cursor;
+  const previousIndex = previous.findIndex((item) => item.id === cursor.id);
+  if (previousIndex >= 0) {
+    const nextIds = new Set(next.map((item) => item.id));
+    for (let offset = 1; offset <= previous.length; offset++) {
+      const candidate = previous[(previousIndex + offset) % previous.length];
+      if (candidate && nextIds.has(candidate.id))
+        return { id: candidate.id, offset: 0 };
+    }
+  }
+  return { id: next[0].id, offset: 0 };
+}
+
 export type RecoveryCircuitKind = "authentication" | "rate-limit" | "storage" | "local-drive" | "network" | "extractor" | "runtime";
 export type RecoveryCircuit = {
   kind: RecoveryCircuitKind;
@@ -455,6 +506,28 @@ export class Engine extends EventEmitter {
     return this.store.get<RecoveryIncident | null>("activeRecoveryIncident", null);
   }
 
+  private restoreRecoveryForStartup() {
+    const incident = this.recoveryIncident();
+    if (!incident || !["recovering", "paused", "recovered"].includes(incident.status))
+      return false;
+    if (incident.status === "recovered") {
+      // Prepared media is process-owned memory. A recovered incident that
+      // survives a restart must resolve and validate its file again before it
+      // can become the authoritative playback selection.
+      incident.status = "recovering";
+      incident.completedAt = null;
+      incident.lastError =
+        "Prepared intended media is being revalidated after application restart";
+      this.saveRecoveryIncident(incident);
+      this.event(
+        `Recovered intended media will be revalidated before playback: ${incident.intendedTitle}`,
+        "info",
+        { incidentId: incident.id, entryId: incident.intendedEntryId },
+      );
+    }
+    return true;
+  }
+
   private saveRecoveryIncident(incident: RecoveryIncident | null) {
     this.store.set("activeRecoveryIncident", incident);
     if (incident) {
@@ -683,6 +756,33 @@ export class Engine extends EventEmitter {
     if (incident.sourceType === "youtube") await source.remove?.(incident.intendedVideoId).catch(() => {});
     incident.completedAt = Date.now();
     this.archiveRecoveryIncident(incident);
+    if (this.activeSource && this.controller && !this.controller.signal.aborted) {
+      if (this.normalHandoffPlan())
+        this.scheduleOwnedRefill(this.activeSource, this.controller.signal);
+      else {
+        const items = this.store.all();
+        const cursor = this.store.get<{ id: string; offset: number } | null>(
+          "cursor",
+          null,
+        );
+        const cursorIndex = Math.max(
+          0,
+          items.findIndex((item) => item.id === cursor?.id),
+        );
+        const startIndex = this.normalEligibleStart(
+          items,
+          cursorIndex,
+          this.store.settings(),
+          true,
+        );
+        this.scheduleRefill(
+          this.activeSource,
+          items,
+          this.controller.signal,
+          startIndex,
+        );
+      }
+    }
     this.event(`Emergency recovery incident closed; intended entry marked failed and programming will continue: ${incident.intendedTitle}`, "error", { incidentId: incident.id, entryId: incident.intendedEntryId, attempts: incident.attempts });
   }
   private downloadQueue() {
@@ -808,6 +908,11 @@ export class Engine extends EventEmitter {
     this.event();
     this.syncTask = (async () => {
       try {
+        const previousItems = this.store.all();
+        const previousCursor = this.store.get<{
+          id: string;
+          offset: number;
+        } | null>("cursor", null);
         let fetched: StoredItem[];
         if (localMode) {
           const provider = new LocalFolderPlaylistProvider(
@@ -846,9 +951,20 @@ export class Engine extends EventEmitter {
           item.selectionPenalty = selectionPenalties[item.videoId] ?? 0;
         }
         const queue = prepareQueue(fetched, settings);
-        this.store.replace(queue.items);
-        if (settings.shuffle) {
-          this.store.set("cursor", null);
+        const queueItems = settings.shuffle
+          ? preserveSyncedShuffleOrder(
+              previousItems,
+              queue.items as StoredItem[],
+            )
+          : queue.items as StoredItem[];
+        this.store.replace(queueItems);
+        const reconciledCursor = reconcileQueueCursor(
+          previousItems,
+          queueItems,
+          previousCursor,
+        );
+        this.store.set("cursor", reconciledCursor);
+        if (settings.shuffle && (!previousItems.length || !previousCursor)) {
           this.store.set("shuffleNeedsShortStart", true);
           this.store.set("shuffleShortStartsRemaining", 2);
           this.store.set(
@@ -862,7 +978,8 @@ export class Engine extends EventEmitter {
         this.store.set("excludedCount", queue.excluded);
         this.store.set("selectionPenalties", queue.penalties);
         this.store.set("filterStats", { reasons: queue.reasons, detectedSeries: queue.detectedSeries });
-        this.event(`${localMode ? "Local folder scanned" : "Playlist synchronized"}: ${queue.items.length} items; ${queue.excluded} excluded; ${queue.detectedSeries} series detected`);
+        this.event(`${localMode ? "Local folder scanned" : "Playlist synchronized"}: ${queueItems.length} items; ${queue.excluded} excluded; ${queue.detectedSeries} series detected`);
+        if (this.state !== "stopped") this.queueChanged();
       } catch (error) {
         const detail = error instanceof Error ? error.message : "Unknown synchronization error";
         this.event(`${localMode ? "Local catalog scan" : "Playlist sync"} failed; previous snapshot preserved — ${detail}`, "error");
@@ -909,6 +1026,7 @@ export class Engine extends EventEmitter {
     this.bufferedEntries.clear();
     this.preparedMedia.clear();
     this.bufferedCount = 0;
+    const recoveryOwnsStartup = this.restoreRecoveryForStartup();
     const controllingMarathon = this.store.controllingMarathon()?.marathon;
     const completedCommitments = controllingMarathon
       ? this.store.completedQueueEntriesSince(controllingMarathon.scheduleUpdatedAt ?? controllingMarathon.createdAt)
@@ -941,7 +1059,7 @@ export class Engine extends EventEmitter {
       this.startupBufferTarget,
       startupItems.filter((item) => item.available).length,
     );
-    this.bufferTarget = marathonOwnsStartup || handoffOwnsStartup
+    this.bufferTarget = recoveryOwnsStartup || marathonOwnsStartup || handoffOwnsStartup
       ? 0
       : s.mediaSource === "local"
         ? Math.max(1, localLibraryTarget)
@@ -958,7 +1076,7 @@ export class Engine extends EventEmitter {
         retries: 0,
       };
     this.state = "buffering";
-    this.event(marathonOwnsStartup ? "Playback requested; restoring Marathon through the existing transition pipeline" : handoffOwnsStartup ? "Playback requested; restoring the prepared normal handoff queue" : "Playback requested; preparing startup buffer");
+    this.event(recoveryOwnsStartup ? "Playback requested; restoring intended media recovery before normal buffering" : marathonOwnsStartup ? "Playback requested; restoring Marathon through the existing transition pipeline" : handoffOwnsStartup ? "Playback requested; restoring the prepared normal handoff queue" : "Playback requested; preparing startup buffer");
     if (controllingMarathon?.status === "ending")
       this.event("Ending state recovered after restart; the unfinished Marathon entry will finish before normal playback resumes", "info", { marathonId: controllingMarathon.id, entryId: controllingMarathon.currentEntryId });
     this.task = (async () => {
@@ -1402,6 +1520,43 @@ export class Engine extends EventEmitter {
     const duration = Number(info.format?.duration);
     if (!Number.isFinite(duration) || duration <= 0)
       throw new Error("Media must have a finite duration");
+    // FFprobe can accept a file whose headers are intact but whose ending is
+    // truncated. Those files otherwise fail only after minutes of live
+    // playback. Decode the final minute before the file enters a buffer.
+    const tailSeconds = Math.max(0.1, Math.min(60, duration));
+    try {
+      await runCapture(
+        this.config.FFMPEG_PATH,
+        [
+          "-v",
+          "error",
+          "-xerror",
+          "-sseof",
+          `-${tailSeconds}`,
+          "-i",
+          file,
+          "-t",
+          String(tailSeconds),
+          "-map",
+          "0:v:0",
+          "-map",
+          "0:a:0?",
+          "-f",
+          "null",
+          process.platform === "win32" ? "NUL" : "/dev/null",
+        ],
+        signal,
+        120000,
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : "media ending could not be decoded";
+      if (/Packaged FFmpeg runtime is missing|required media executable/i.test(message))
+        throw error;
+      throw new Error(
+        `Downloaded media validation failed near its ending: ${message}`,
+      );
+    }
     return info;
   }
 
@@ -1576,7 +1731,25 @@ export class Engine extends EventEmitter {
   private ensureNormalHandoffPlan(marathonId: string, items: StoredItem[]) {
     const existing = this.normalHandoffPlan();
     if (existing?.marathonId === marathonId) return existing;
-    const entryIds = this.bufferCandidates(items).slice(0, this.bufferLimit).map((item) => item.id);
+    const settings = this.store.settings();
+    const cursor = this.store.get<{ id: string; offset: number } | null>(
+      "cursor",
+      null,
+    );
+    const cursorIndex = Math.max(
+      0,
+      items.findIndex((item) => item.id === cursor?.id),
+    );
+    const eligibleStart = this.normalEligibleStart(
+      items,
+      cursorIndex,
+      settings,
+      true,
+      cursor && cursor.offset > 0 ? cursor.id : "",
+    );
+    const entryIds = this.bufferCandidates(items, eligibleStart)
+      .slice(0, this.bufferLimit)
+      .map((item) => item.id);
     const plan: NormalHandoffPlan = { marathonId, entryIds, createdAt: Date.now() };
     this.store.set("marathonNormalHandoff", plan);
     if (!entryIds.length)
@@ -2053,7 +2226,10 @@ export class Engine extends EventEmitter {
           }
         }
         if (!prepared) {
-          this.event(`Transition ${transition}: source is not preloaded; standby fallback started`, "warn");
+          if (isFallback)
+            this.event(`Transition ${transition}: validating Emergency Fallback media for direct playback`, "info");
+          else
+            this.event(`Transition ${transition}: source is not preloaded; standby fallback started`, "warn");
           idle = standby(this.config, s, epoch, clipSignal, (reason) =>
             this.event(
               `Transition ${transition}: standby encoder failed${reason ? ` — ${reason}` : ""}; retry scheduled`,
@@ -2117,6 +2293,9 @@ export class Engine extends EventEmitter {
                 total: fallbackMarathonRecord.totalEntries,
               }
             : undefined;
+        const fallbackSequence = isFallback
+          ? this.fallbackStreak().count + 1
+          : 0;
         const ov = await overlay(
           this.config,
           {
@@ -2127,7 +2306,7 @@ export class Engine extends EventEmitter {
           publishedAt,
           { offset, total: duration },
           marathonOverlay,
-          isFallback,
+          fallbackSequence,
         );
         clipSignal.throwIfAborted();
         if (idle) {
@@ -2293,7 +2472,16 @@ export class Engine extends EventEmitter {
                   if (!isFallback) {
                     historyId = this.store.startPlayback(item!);
                     const recovered = this.recoveryIncident();
-                    if (recovered?.status === "recovered" && recovered.intendedEntryId === item!.id) {
+                    if (
+                      recovered?.intendedEntryId === item!.id &&
+                      !["cancelled", "exhausted"].includes(recovered.status)
+                    ) {
+                      // A produced first frame is authoritative proof that the
+                      // intended entry recovered, even if the attempt callback
+                      // changed the incident from recovered back to recovering.
+                      recovered.status = "recovered";
+                      recovered.completedAt = Date.now();
+                      recovered.lastError = "";
                       this.event(`Intended playback resumed after Emergency Fallback: ${item!.title}`, "info", { incidentId: recovered.id, entryId: recovered.intendedEntryId, attempts: recovered.attempts });
                       this.archiveRecoveryIncident(recovered);
                       const ledger = this.store.get<Record<string, { attempts: number; lastAttemptAt: number }>>("recoveryAttemptLedger", {});
@@ -2317,7 +2505,9 @@ export class Engine extends EventEmitter {
                       ...s,
                       overlay: { ...s.overlay, title: item!.title },
                     };
-                    const expected = overlayLayout(activeSettings, activePublishedAt);
+                    const expected = isFallback
+                      ? { title: "", date: "" }
+                      : overlayLayout(activeSettings, activePublishedAt);
                     const directory = path.join(this.config.DATA_DIR, "overlay");
                     void Promise.all([
                       readFile(path.join(directory, "title.txt"), "utf8").catch(() => ""),
@@ -2335,7 +2525,7 @@ export class Engine extends EventEmitter {
                         activePublishedAt,
                         { offset: this.elapsed, total: duration },
                         marathonOverlay,
-                        isFallback,
+                        fallbackSequence,
                       ).then(() =>
                         this.event("Restored stale title/date overlay", "warn"),
                       );
@@ -2347,12 +2537,13 @@ export class Engine extends EventEmitter {
                 lastFrame = n;
                 lastProgress = Date.now();
                 this.elapsed = Math.min(duration, offset + n / s.fps);
-                if (!marathon && Date.now() - lastCheckpoint > 5000) {
+                if (!marathon && !isFallback && Date.now() - lastCheckpoint > 5000) {
                   lastCheckpoint = Date.now();
-                  this.store.set("cursor", {
-                    id: item!.id,
-                    offset: this.elapsed,
-                  });
+                  if (this.store.all().some((candidate) => candidate.id === item!.id))
+                    this.store.set("cursor", {
+                      id: item!.id,
+                      offset: this.elapsed,
+                    });
                 }
                 this.event();
               }
@@ -2392,8 +2583,10 @@ export class Engine extends EventEmitter {
               await this.abandonRecoveryIncident(incident, "Marathon ended early while the intended entry was in recovery", source);
             } else if (incident.status === "exhausted") {
               await this.abandonRecoveryIncident(incident, incident.lastError || "Emergency recovery attempts exhausted", source);
+            } else if (incident.status === "recovered") {
+              this.event(`Emergency fallback completed; recovered intended media will play at the next safe boundary: ${incident.intendedTitle}`, "info", { incidentId: incident.id, fallbackId: fallbackMedia.id, entryId: incident.intendedEntryId });
             } else {
-              this.event(`Emergency fallback completed; intended recovery remains ${incident.status}: ${fallbackMedia.title}`, "info", { incidentId: incident.id, fallbackId: fallbackMedia.id });
+              this.event(`Emergency fallback completed; recovery was checked and remains ${incident.status}; another fallback will play only while the intended media is still unavailable: ${fallbackMedia.title}`, "info", { incidentId: incident.id, fallbackId: fallbackMedia.id });
             }
           }
           consumed = false;
@@ -2523,7 +2716,14 @@ export class Engine extends EventEmitter {
         this.event();
         const fresh = this.store.all();
         const at = fresh.findIndex((i) => i.id === item!.id);
-        const next = fresh[(at + 1) % Math.max(1, fresh.length)];
+        const preserved = this.store.get<{ id: string; offset: number } | null>(
+          "cursor",
+          null,
+        );
+        const next = at >= 0
+          ? fresh[(at + 1) % Math.max(1, fresh.length)]
+          : fresh.find((candidate) => candidate.id === preserved?.id) ??
+            fresh[0];
         this.store.set("cursor", next ? { id: next.id, offset: 0 } : null);
       } else if (consumed && marathon) {
         this.preparedMedia.delete(item.id);
@@ -2575,8 +2775,17 @@ export class Engine extends EventEmitter {
 
   queueChanged() {
     const marathon = this.store.controllingMarathon()?.marathon;
-    if (marathon?.status === "active" || this.current?.id.startsWith("marathon:") || this.normalHandoffPlan()) {
-      this.event("Normal queue update saved; buffer changes are deferred until Marathon playback ends");
+    if (
+      marathon?.status === "active" ||
+      this.current?.id.startsWith("marathon:") ||
+      this.normalHandoffPlan() ||
+      this.recoveryIncident()
+    ) {
+      this.event(
+        this.recoveryIncident()
+          ? "Normal queue update saved; buffer changes are deferred until Emergency Fallback recovery releases the intended entry"
+          : "Normal queue update saved; buffer changes are deferred until Marathon playback ends",
+      );
       return;
     }
     if (!this.activeSource || this.queueRefreshPending) return;

@@ -52,6 +52,15 @@ function wrapTitle(value: string, width = 34) {
 
 let reloadableWriteGeneration = 0;
 async function writeReloadableText(file: string, value: string) {
+  // FFmpeg's drawtext reload opens this path repeatedly. Replacing the file
+  // with rename() on Windows creates a short interval in which FFmpeg can see
+  // a missing or locked path and terminate the entire standby filter graph.
+  // A direct write keeps the stable path available; these files are tiny and
+  // a partially observed update is harmless compared with losing continuity.
+  if (process.platform === "win32") {
+    await writeFile(file, value);
+    return;
+  }
   const temporary = `${file}.${process.pid}.${++reloadableWriteGeneration}.tmp`;
   await writeFile(temporary, value);
   try {
@@ -162,6 +171,7 @@ export function standby(
   };
   const task = (async () => {
     while (!combined.aborted) {
+      let rapidMinimalRetry = false;
       try {
         const loading = loadingFile(c);
         await mkdir(path.dirname(loading), { recursive: true });
@@ -328,16 +338,20 @@ export function standby(
         const reason = code === 0
           ? "standby producer ended unexpectedly"
           : mediaFailure(child);
+        rapidMinimalRetry = !minimalContinuity;
         minimalContinuity = true;
         reportError(reason);
       } catch (error) {
         if (combined.aborted) break;
+        rapidMinimalRetry = !minimalContinuity;
         minimalContinuity = true;
         reportError(
           error instanceof Error ? error.message : "standby producer failed",
         );
       }
-      await delay(5000, combined);
+      // Start the plain continuity producer immediately after the decorated
+      // standby fails. Subsequent failures retain the bounded retry delay.
+      await delay(rapidMinimalRetry ? 250 : 5000, combined);
     }
   })().catch(() => {});
   return {

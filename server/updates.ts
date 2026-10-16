@@ -3,6 +3,18 @@ export const updateCommand =
 
 export const updateHistory = [
   {
+    version: "1.6.10",
+    date: "Oct 16, 2026",
+    title: "Download recovery and queue handoff repair",
+    items: [
+      "Emergency Fallback preserves the intended queue entry, rechecks recovery after each fallback, and resumes the recovered video before later programming",
+      "Playlist synchronization preserves the active shuffled order and cursor so background sync cannot replay completed media or invalidate prepared handoffs",
+      "Downloaded media receives an FFmpeg ending decode check before buffering, preventing truncated files from failing during live playback",
+      "Windows standby overlays keep stable reloadable text paths and fall back quickly to minimal continuity if decorated standby cannot start",
+      "Series finales remain grouped with preceding episodes, and fallback overlays use a compact color-coded streak indicator without exposing filenames",
+    ],
+  },
+  {
     version: "1.6.9",
     date: "Oct 15, 2026",
     title: "Shutdown callback safety",

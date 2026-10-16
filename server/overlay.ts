@@ -81,6 +81,15 @@ export type MarathonOverlay = {
   total: number;
 };
 
+export function fallbackIndicatorColor(sequence: number) {
+  if (sequence <= 1) return "0x43A047";
+  if (sequence === 2) return "0xE5B93F";
+  if (sequence === 3) return "0xF28C28";
+  if (sequence === 4) return "0xE53935";
+  if (sequence === 5) return "0x8B1E1E";
+  return "0x7E57C2";
+}
+
 export async function overlay(
   c: Config,
   s: Settings,
@@ -88,29 +97,29 @@ export async function overlay(
   publishedAt = "",
   timeline?: { offset: number; total: number },
   marathon?: MarathonOverlay,
-  fallbackTitle = false,
+  fallbackSequence = 0,
 ): Promise<{ inputs: string[]; filter: string }> {
+  const suppressBottomLeft = fallbackSequence > 0;
   const base = `[0:v:0]scale=${s.width}:${s.height}:force_original_aspect_ratio=decrease,pad=${s.width}:${s.height}:(ow-iw)/2:(oh-ih)/2,setsar=1,fps=${s.fps},format=yuv420p[base]`;
   if (!s.overlay.enabled)
     return { inputs: [], filter: base + ";[base]null[v]" };
   await mkdir(directory, { recursive: true });
   const layout = overlayLayout(s, publishedAt);
   const textFile = path.join(directory, "title.txt");
-  await writeFile(textFile, layout.title);
+  await writeFile(textFile, suppressBottomLeft ? "" : layout.title);
   const dateFile = path.join(directory, "date.txt");
-  await writeFile(dateFile, layout.date);
+  await writeFile(dateFile, suppressBottomLeft ? "" : layout.date);
   const marathonFile = path.join(directory, "marathon.txt");
   const progressFile = path.join(directory, "marathon-progress.txt");
   if (marathon) {
     await writeFile(marathonFile, `MARATHON: ${marathon.name.replace(/[\r\n\x00-\x1f]/g, " ")}`);
     await writeFile(progressFile, `${marathon.completed} / ${marathon.total} Complete`);
   }
-  const avatar = s.overlay.avatar
+  const avatar = !suppressBottomLeft && s.overlay.avatar
     ? await containedFile(path.join(c.MEDIA_DIR, "avatars"), s.overlay.avatar)
     : "";
   const avatarIndex = 2;
   const style = `fontfile='${filterPath(c.FONT_FILE)}':expansion=none:fontcolor=white:bordercolor=black:borderw=${Math.max(1, Math.round(layout.fontSize / 12))}`;
-  const titleStyle = fallbackTitle ? style.replace("fontcolor=white", "fontcolor=0xA8ADB5") : style;
   const timelineText = timeline
     ? `%{eif\\:floor((t+${Math.max(0, timeline.offset)})/60)\\:d\\:2}\\:%{eif\\:floor(t+${Math.max(0, timeline.offset)})-60*floor((t+${Math.max(0, timeline.offset)})/60)\\:d\\:2}/${formatTimeline(timeline.total).replace(/:/g, "\\:")}`
     : "";
@@ -122,23 +131,36 @@ export async function overlay(
     : 0;
   const countdownStyle = style.replace("expansion=none", "expansion=normal");
   const countdown = timeline
-    ? `,drawtext=${countdownStyle}:text='Next video in %{eif\\:max(0\\,ceil(${timeline.total - timeline.offset}-t))\\:d}':fontsize=${Math.max(40, Math.round(s.height / 16))}:x=(w-tw)/2:y=${Math.max(28, Math.round(s.height * .06))}:enable='between(t\\,${countdownStart}\\,${countdownEnd})':alpha='if(lt(t\\,${countdownStart + .6})\\,(t-${countdownStart})/.6\\,1)'`
+    ? `drawtext=${countdownStyle}:text='Next video in %{eif\\:max(0\\,ceil(${timeline.total - timeline.offset}-t))\\:d}':fontsize=${Math.max(40, Math.round(s.height / 16))}:x=(w-tw)/2:y=${Math.max(28, Math.round(s.height * .06))}:enable='between(t\\,${countdownStart}\\,${countdownEnd})':alpha='if(lt(t\\,${countdownStart + .6})\\,(t-${countdownStart})/.6\\,1)'`
     : "";
   const timelineSize = Math.max(layout.dateSize + 5, 18);
   const marathonSize = Math.max(layout.dateSize + 2, 16);
   const goldStyle = style.replace("bordercolor=black", "bordercolor=0xD9A441");
-  const marathonDraw = marathon
-    ? `,drawtext=${goldStyle}:textfile='${filterPath(marathonFile)}':reload=1:fontsize=${marathonSize}:x=${s.overlay.margin}:y=max(${s.overlay.margin}\\,${Math.round(layout.y - marathonSize - 10)})`
+  const marathonDraw = marathon && !suppressBottomLeft
+    ? `drawtext=${goldStyle}:textfile='${filterPath(marathonFile)}':reload=1:fontsize=${marathonSize}:x=${s.overlay.margin}:y=max(${s.overlay.margin}\\,${Math.round(layout.y - marathonSize - 10)})`
     : "";
   const progressRightOffset = timelineText ? Math.round(timelineSize * 8.5) + 34 : 0;
   const progressDraw = marathon
-    ? `,drawtext=${goldStyle}:textfile='${filterPath(progressFile)}':reload=1:fontsize=${marathonSize}:x=w-tw-${s.overlay.margin + progressRightOffset}:y=h-th-${s.overlay.margin}`
+    ? `drawtext=${goldStyle}:textfile='${filterPath(progressFile)}':reload=1:fontsize=${marathonSize}:x=w-tw-${s.overlay.margin + progressRightOffset}:y=h-th-${s.overlay.margin}`
     : "";
-  const draw = `drawtext=${titleStyle}:textfile='${filterPath(textFile)}':reload=1:fontsize=${layout.fontSize}:line_spacing=${Math.ceil(layout.fontSize * .25)}:x=${layout.textX}:y=${layout.textY}` +
-    (layout.date ? `,drawtext=${style}:textfile='${filterPath(dateFile)}':reload=1:fontsize=${layout.dateSize}:x=${layout.textX}:y=${layout.textY + layout.dateOffset}` : "") +
-    (timelineText ? `,drawtext=${style.replace("expansion=none", "expansion=normal")}:text='${timelineText}':fontsize=${timelineSize}:x=w-tw-${s.overlay.margin}:y=h-th-${s.overlay.margin}` : "") +
-    marathonDraw + progressDraw + countdown;
-  const box = `[base]null[box]`;
+  const draw = [
+    suppressBottomLeft
+      ? ""
+      : `drawtext=${style}:textfile='${filterPath(textFile)}':reload=1:fontsize=${layout.fontSize}:line_spacing=${Math.ceil(layout.fontSize * .25)}:x=${layout.textX}:y=${layout.textY}`,
+    !suppressBottomLeft && layout.date
+      ? `drawtext=${style}:textfile='${filterPath(dateFile)}':reload=1:fontsize=${layout.dateSize}:x=${layout.textX}:y=${layout.textY + layout.dateOffset}`
+      : "",
+    timelineText
+      ? `drawtext=${style.replace("expansion=none", "expansion=normal")}:text='${timelineText}':fontsize=${timelineSize}:x=w-tw-${s.overlay.margin}:y=h-th-${s.overlay.margin}`
+      : "",
+    marathonDraw,
+    progressDraw,
+    countdown,
+  ].filter(Boolean).join(",") || "null";
+  const fallbackIndicatorSize = Math.max(8, Math.round(s.height / 90));
+  const box = suppressBottomLeft
+    ? `[base]drawbox=x=${s.overlay.margin}:y=h-${s.overlay.margin}-${fallbackIndicatorSize}:w=${fallbackIndicatorSize}:h=${fallbackIndicatorSize}:color=${fallbackIndicatorColor(fallbackSequence)}:t=fill[box]`
+    : `[base]null[box]`;
   if (!avatar)
     return {
       inputs: [],

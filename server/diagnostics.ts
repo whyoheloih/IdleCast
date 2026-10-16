@@ -244,7 +244,7 @@ const matchers: Array<[DiagnosticCode, RegExp]> = [
   ["IC-DL-001", /yt-dlp executable could not start/i],
   ["IC-DL-002", /javascript challenge|signature extraction|nsig|js runtime/i],
   ["IC-DL-006", /audio (?:download|fragment|format).*fail/i],
-  ["IC-DL-007", /merge|mux|postprocess/i],
+  ["IC-DL-007", /\bmerge(?:d|s|r|ing)?\b|\bmux(?:ed|es|er|ing)?\b|\bpost-?process(?:ed|es|or|ing)?\b/i],
   ["IC-DL-010", /http 403|forbidden/i],
   ["IC-DL-011", /http 429|too many requests|rate limit/i],
   ["IC-DL-012", /fragment.*(?:retry|fail)|retry.*fragment/i],

@@ -330,3 +330,84 @@ test("series blocks override long adjacency and require five ordinary videos bet
   assert.equal(state.ordinaryVideosSinceSeries, SERIES_BLOCK_GAP);
   assert.equal(canStartSeriesBlock(queue[seriesStarts[1]], state.activeSeriesKey, state.ordinaryVideosSinceSeries), true);
 });
+
+test("series finales use the full selected continuation amount", () => {
+  const make = (id: string, title: string) => ({
+    id,
+    videoId: id.padEnd(11, "0").slice(0, 11),
+    position: Number(id.replace(/\D/g, "")) || 0,
+    title,
+    channel: "Test",
+    thumbnail: "",
+    available: true,
+    duration: 300,
+    publishedAt: "2026-01-01T00:00:00Z",
+  });
+
+  for (const selectedAmount of [2, 3, 4]) {
+    const episodeCount = selectedAmount + 2;
+    const series = Array.from({ length: episodeCount }, (_, index) =>
+      make(
+        "s" + (index + 1),
+        "Episode " + (index + 1) + " | Complete Series [" + (index + 1) + "]",
+      ),
+    );
+    const ordinary = Array.from({ length: 10 }, (_, index) =>
+      make("o" + (index + 1), "Ordinary " + (index + 1)),
+    );
+    const settings = settingsSchema.parse({
+      ...defaults,
+      shuffle: true,
+      filters: {
+        ...defaults.filters,
+        seriesMode: "strict",
+        seriesLimit: selectedAmount,
+      },
+    });
+    const queue = prepareQueue([...series, ...ordinary], settings, () => 0).items;
+    const finaleIndex = queue.findIndex((item) => item.id === "s" + episodeCount);
+    const expected = Array.from(
+      { length: selectedAmount },
+      (_, index) => episodeCount - selectedAmount + index + 1,
+    );
+
+    assert.ok(finaleIndex >= selectedAmount - 1);
+    assert.deepEqual(
+      queue
+        .slice(finaleIndex - selectedAmount + 1, finaleIndex + 1)
+        .map((item) => item.seriesIndex),
+      expected,
+      "selected continuation amount " + selectedAmount,
+    );
+  }
+});
+
+test("series shuffle may start with a later consecutive episode window", () => {
+  const items = Array.from({ length: 7 }, (_, index) => ({
+    id: "later-" + (index + 1),
+    videoId: ("later" + (index + 1)).padEnd(11, "0").slice(0, 11),
+    position: index,
+    title: "Episode " + (index + 1) + " | Flexible Series [" + (index + 1) + "]",
+    channel: "Test",
+    thumbnail: "",
+    available: true,
+    duration: 300,
+    publishedAt: "2026-01-01T00:00:00Z",
+  }));
+  const settings = settingsSchema.parse({
+    ...defaults,
+    shuffle: true,
+    filters: {
+      ...defaults.filters,
+      seriesMode: "strict",
+      seriesLimit: 3,
+    },
+  });
+
+  const queue = prepareQueue(items, settings, () => 999_999).items;
+
+  assert.deepEqual(
+    queue.slice(0, 3).map((item) => item.seriesIndex),
+    [5, 6, 7],
+  );
+});
